@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -11,6 +12,36 @@ from vellum.startup import StartupPrerequisiteError
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+_cuda_dll_directory_handles: list[Any] = []
+_registered_cuda_dll_directories: set[Path] = set()
+
+
+def _register_cuda_dll_directories() -> None:
+    """Make CUDA 12 libraries available to Python's Windows DLL loader."""
+    if os.name != "nt":
+        return
+
+    candidates: list[Path] = []
+    if cuda_path := os.environ.get("CUDA_PATH"):
+        candidates.append(Path(cuda_path) / "bin")
+
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    toolkit_directory = program_files / "NVIDIA GPU Computing Toolkit" / "CUDA"
+    candidates.extend(toolkit_directory.glob("v12.*/bin"))
+
+    candidates.extend(
+        Path(path) for path in os.environ.get("PATH", "").split(os.pathsep) if path
+    )
+    for directory in candidates:
+        if (
+            directory in _registered_cuda_dll_directories
+            or not (directory / "cublas64_12.dll").is_file()
+        ):
+            continue
+        _cuda_dll_directory_handles.append(os.add_dll_directory(str(directory)))
+        _registered_cuda_dll_directories.add(directory)
 
 
 class WindowsPrerequisiteProbe:
@@ -33,6 +64,7 @@ class WindowsPrerequisiteProbe:
 
     @property
     def cuda_available(self) -> bool:
+        _register_cuda_dll_directories()
         try:
             import ctranslate2
         except ImportError:
@@ -44,6 +76,7 @@ class FasterWhisperTranscriptionEngine:
     """The resident local Transcription engine required by the v1 domain model."""
 
     def __init__(self, model_directory: Path) -> None:
+        _register_cuda_dll_directories()
         try:
             from faster_whisper import WhisperModel
         except ImportError as error:
