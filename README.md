@@ -8,18 +8,18 @@ the same window that was focused at release.
 
 ## Tracer-bullet setup
 
+Install [uv](https://docs.astral.sh/uv/) first. It provisions the project-pinned
+Python 3.13 environment and installs the versions recorded in `uv.lock`.
+
 Vellum requires Windows, an NVIDIA CUDA-capable GPU available to CTranslate2,
 and a pre-downloaded CTranslate2 `large-v3-turbo` model. It never downloads a
 model or sends Dictation session data at runtime.
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
-pip install huggingface_hub
-huggingface-cli download Systran/faster-whisper-large-v3-turbo `
+uv sync --locked --extra model-download
+uv run hf download Systran/faster-whisper-large-v3-turbo `
   --local-dir "$env:LOCALAPPDATA\Vellum\models\large-v3-turbo"
-vellum
+uv run vellum
 ```
 
 Set `VELLUM_MODEL_DIR` to use another local `large-v3-turbo` model directory
@@ -41,10 +41,10 @@ Text insertion). They are deliberately platform-independent; the Windows
 adapters are kept behind those seams.
 
 ```powershell
-pip install -e ".[dev]"
-python -m pytest tests/test_startup.py
-python -m pytest tests/test_dictation_session.py
-python -m mypy src
-python -m ruff check .
-python -m pytest
+uv sync --locked --all-groups
+uv run pytest tests/test_startup.py
+uv run pytest tests/test_dictation_session.py
+uv run mypy src
+uv run ruff check .
+uv run pytest
 ```
