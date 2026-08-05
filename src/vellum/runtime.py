@@ -88,10 +88,24 @@ class FasterWhisperTranscriptionEngine:
             self._model: Any = WhisperModel(
                 str(model_directory), device="cuda", compute_type="float16", local_files_only=True
             )
+            self._validate_cuda_inference()
         except Exception as error:
             raise StartupPrerequisiteError(
-                "Vellum cannot start; the local large-v3-turbo model could not be loaded on CUDA."
+                "Vellum cannot start; the local large-v3-turbo model or CUDA inference "
+                f"runtime could not be loaded: {error}"
             ) from error
+
+    def _validate_cuda_inference(self) -> None:
+        """Force one GPU inference while warming so lazy CUDA failures block startup."""
+        import numpy as np
+
+        segments, _ = self._model.transcribe(
+            np.zeros(16_000, dtype=np.float32),
+            language="en",
+            vad_filter=False,
+            condition_on_previous_text=False,
+        )
+        next(iter(segments), None)
 
     def transcribe(self, audio: object) -> str:
         segments, _ = self._model.transcribe(
@@ -209,5 +223,5 @@ class SoundDeviceRecorder:
             chunks: Sequence[np.ndarray[Any, Any]] = self._chunks
             self._chunks = []
         if not chunks:
-            return np.empty((0, 1), dtype=np.float32)
-        return np.concatenate(chunks, axis=0)
+            return np.empty(0, dtype=np.float32)
+        return np.concatenate(chunks, axis=0).reshape(-1)

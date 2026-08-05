@@ -12,8 +12,11 @@ Install [uv](https://docs.astral.sh/uv/) first. It provisions the project-pinned
 Python 3.13 environment and installs the versions recorded in `uv.lock`.
 
 Vellum requires Windows, an NVIDIA CUDA-capable GPU available to CTranslate2,
-and a pre-downloaded CTranslate2 `large-v3-turbo` model. It never downloads a
-model or sends Dictation session data at runtime.
+the CUDA 12 runtime (including `cublas64_12.dll`), and a pre-downloaded
+CTranslate2 `large-v3-turbo` model. Install a compatible NVIDIA CUDA 12 toolkit
+and ensure its `bin` directory is on `PATH`; the NVIDIA driver alone does not
+provide the cuBLAS runtime DLL. It never downloads a model or sends Dictation
+session data at runtime.
 
 ```powershell
 uv sync --locked --extra model-download

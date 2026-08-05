@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from vellum.runtime import FasterWhisperTranscriptionEngine, WindowsPrerequisiteProbe
+from vellum.startup import StartupPrerequisiteError
 
 
 def test_engine_registers_the_cuda_bin_directory_before_loading_cublas(
@@ -104,6 +105,34 @@ def test_cuda_preflight_registers_the_default_cuda_12_bin_directory(
 
     assert WindowsPrerequisiteProbe(Path("large-v3-turbo")).cuda_available is True
     assert str(cuda_bin_directory) in added_directories
+
+
+def test_engine_rejects_a_cuda_runtime_that_fails_on_lazy_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inference_error = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+    class LazyInferenceFailureModel:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def transcribe(self, *_: object, **__: object) -> tuple[Iterator[object], object]:
+            def segments() -> Iterator[object]:
+                raise inference_error
+                yield object()
+
+            return segments(), object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=LazyInferenceFailureModel),
+    )
+
+    with pytest.raises(StartupPrerequisiteError) as raised:
+        FasterWhisperTranscriptionEngine(Path("large-v3-turbo"))
+
+    assert raised.value.__cause__ is inference_error
 
 
 def test_model_prerequisite_requires_all_files_needed_by_the_local_engine(tmp_path: Path) -> None:
