@@ -17,7 +17,7 @@ model or sends Dictation session data at runtime.
 
 ```powershell
 uv sync --locked --extra model-download
-uv run hf download Systran/faster-whisper-large-v3-turbo `
+uv run hf download deepdml/faster-whisper-large-v3-turbo-ct2 `
   --local-dir "$env:LOCALAPPDATA\Vellum\models\large-v3-turbo"
 uv run vellum
 ```
