@@ -72,12 +72,28 @@ class DictationSession:
         return self._active
 
     def start(self) -> None:
-        """Start capture if this is not already an active Dictation session."""
+        """Start capture if this is not already an active Dictation session.
+
+        If recording feedback fails, try to close capture before propagating the
+        failure. A cleanup failure leaves the session active because capture may
+        still be running, and both failures are reported together.
+        """
         if self._active:
             return
         self._recorder.start()
         self._active = True
-        self._feedback(SessionFeedback.RECORDING)
+        try:
+            self._feedback(SessionFeedback.RECORDING)
+        except Exception as feedback_error:
+            try:
+                self._recorder.stop()
+            except Exception as cleanup_error:
+                raise ExceptionGroup(
+                    "Could not publish recording feedback or stop microphone capture.",
+                    [feedback_error, cleanup_error],
+                ) from None
+            self._active = False
+            raise
 
     def capture_insertion_target(self) -> InsertionTarget:
         """Capture the foreground application at the precise hotkey-release boundary."""

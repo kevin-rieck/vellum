@@ -2,18 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
+
 from vellum.session import DictationSession, SessionFeedback
 
 
 class FakeRecorder:
-    def __init__(self) -> None:
+    def __init__(self, *, stop_error: Exception | None = None) -> None:
         self.started = False
         self.audio = b"spoken audio"
+        self.stop_error = stop_error
 
     def start(self) -> None:
         self.started = True
 
     def stop(self) -> bytes:
+        if self.stop_error is not None:
+            raise self.stop_error
         self.started = False
         return self.audio
 
@@ -21,9 +26,9 @@ class FakeRecorder:
 class FakeTranscriptionEngine:
     def __init__(self, transcript: str) -> None:
         self.transcript = transcript
-        self.audio: bytes | None = None
+        self.audio: object | None = None
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: object) -> str:
         self.audio = audio
         return self.transcript
 
@@ -77,6 +82,53 @@ def session(
         clipboard,
         inserter,
     )
+
+
+def test_start_feedback_failure_closes_capture_and_leaves_the_session_inactive() -> None:
+    recorder = FakeRecorder()
+
+    def failing_feedback(_: SessionFeedback) -> None:
+        raise RuntimeError("tray unavailable")
+
+    dictation = DictationSession(
+        recorder=recorder,
+        transcription_engine=FakeTranscriptionEngine("ship the tracer bullet"),
+        focus=FakeFocus(target=101),
+        clipboard=FakeClipboard(),
+        inserter=FakeInserter(),
+        feedback=failing_feedback,
+    )
+
+    with pytest.raises(RuntimeError, match="tray unavailable"):
+        dictation.start()
+
+    assert recorder.started is False
+    assert dictation.active is False
+
+
+def test_start_feedback_and_cleanup_failures_leave_capture_active_and_are_preserved() -> None:
+    feedback_error = RuntimeError("tray unavailable")
+    cleanup_error = RuntimeError("microphone unavailable")
+    recorder = FakeRecorder(stop_error=cleanup_error)
+
+    def failing_feedback(_: SessionFeedback) -> None:
+        raise feedback_error
+
+    dictation = DictationSession(
+        recorder=recorder,
+        transcription_engine=FakeTranscriptionEngine("ship the tracer bullet"),
+        focus=FakeFocus(target=101),
+        clipboard=FakeClipboard(),
+        inserter=FakeInserter(),
+        feedback=failing_feedback,
+    )
+
+    with pytest.raises(ExceptionGroup) as raised:
+        dictation.start()
+
+    assert raised.value.exceptions == (feedback_error, cleanup_error)
+    assert recorder.started is True
+    assert dictation.active is True
 
 
 def test_releasing_push_to_talk_copies_raw_transcript_and_pastes_into_unchanged_target() -> None:
