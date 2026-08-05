@@ -31,7 +31,9 @@ To verify the tracer bullet, focus Notepad, hold Ctrl+Alt+Space while speaking
 English, then release it. The raw Transcript should appear in Notepad and
 remain available through Ctrl+V. If focus moves while transcription runs,
 Vellum does not paste and instead notifies you that the Transcript remains in
-the clipboard.
+the clipboard. Errors are also written to the launching console and to
+`%LOCALAPPDATA%\Vellum\vellum.log`, including a traceback for failures after
+the hotkey is used. The log never contains audio or Transcripts.
 
 ## Development
 

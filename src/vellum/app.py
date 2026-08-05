@@ -6,6 +6,7 @@ import sys
 from collections.abc import Sequence
 
 from vellum.config import VellumPaths
+from vellum.diagnostics import configure_diagnostics, log_error
 from vellum.hotkey import PushToTalkHotkey
 from vellum.runtime import (
     AsyncFasterWhisperTranscriptionEngine,
@@ -26,11 +27,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 2
 
     paths = VellumPaths.from_environment()
+    configure_diagnostics(paths.diagnostics_log_file)
     try:
         require_startup_prerequisites(WindowsPrerequisiteProbe(paths.model_directory))
         tray = TrayApplication()
     except (RuntimeError, StartupPrerequisiteError) as error:
-        print(str(error), file=sys.stderr)
+        log_error(error)
         return 2
 
     def warmed(error: Exception | None) -> None:
@@ -38,7 +40,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
             hotkey.enable()
             tray.feedback(SessionFeedback.IDLE)
             return
-        print(str(error), file=sys.stderr)
         tray.fail_startup(error)
 
     transcription_engine = AsyncFasterWhisperTranscriptionEngine(paths.model_directory, warmed)

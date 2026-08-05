@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from vellum.diagnostics import log_error
 from vellum.hotkey import PushToTalkHotkey
 from vellum.session import SessionFeedback
 from vellum.sounds import WindowsSessionSounds
@@ -75,6 +76,8 @@ class TrayApplication:
             )
 
     def report_error(self, error: Exception) -> None:
+        """Show and persist failures raised during a Dictation session."""
+        log_error(error)
         self.feedback(SessionFeedback.ERROR)
         self._icon.notify(str(error), "Vellum error")
 
