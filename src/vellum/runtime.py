@@ -147,13 +147,21 @@ class SoundDeviceRecorder:
                 if remaining_frames > 0:
                     self._chunks.append(indata[:remaining_frames].copy())
 
-        self._stream = sd.InputStream(
-            samplerate=self._sample_rate,
-            channels=1,
-            dtype="float32",
-            callback=capture,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=1,
+                dtype="float32",
+                callback=capture,
+            )
+            self._stream.start()
+        except sd.PortAudioError as error:
+            self._stream = None
+            raise RuntimeError(
+                "Vellum could not access the microphone. In Windows Settings > Privacy & "
+                "security > Microphone, turn on Microphone access and Let desktop apps "
+                "access your microphone, then restart Vellum."
+            ) from error
 
     def stop(self) -> np.ndarray[Any, Any]:
         if self._stream is None:
