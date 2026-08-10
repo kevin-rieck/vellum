@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import Event, Thread
 
 import pytest
 
@@ -10,11 +11,13 @@ from vellum.session import DictationSession, SessionFeedback
 class FakeRecorder:
     def __init__(self, *, stop_error: Exception | None = None) -> None:
         self.started = False
+        self.starts = 0
         self.audio = b"spoken audio"
         self.stop_error = stop_error
 
     def start(self) -> None:
         self.started = True
+        self.starts += 1
 
     def stop(self) -> bytes:
         if self.stop_error is not None:
@@ -55,11 +58,17 @@ class FakeClipboard:
 
 
 class FakeInserter:
-    def __init__(self) -> None:
+    def __init__(self, *, can_paste: bool = True) -> None:
+        self.can_paste = can_paste
         self.inserted = False
+        self.target: object | None = None
 
-    def paste(self) -> None:
+    def paste(self, insertion_target: object) -> bool:
+        self.target = insertion_target
+        if not self.can_paste:
+            return False
         self.inserted = True
+        return True
 
 
 def session(
@@ -158,6 +167,7 @@ def test_transcript_stays_in_clipboard_when_insertion_target_changes() -> None:
         SessionFeedback.RECORDING,
         SessionFeedback.TRANSCRIBING,
         SessionFeedback.CANCELLED,
+        SessionFeedback.IDLE,
     ]
 
 
@@ -171,6 +181,74 @@ def test_release_target_failure_closes_capture() -> None:
 
     assert dictation.active is False
     assert events == [SessionFeedback.RECORDING, SessionFeedback.ERROR]
+
+
+def test_stale_target_at_the_insertion_boundary_preserves_the_transcript() -> None:
+    focus = FakeFocus(target=101)
+    events: list[SessionFeedback] = []
+    clipboard = FakeClipboard()
+    inserter = FakeInserter(can_paste=False)
+    dictation = DictationSession(
+        recorder=FakeRecorder(),
+        transcription_engine=FakeTranscriptionEngine("ship the tracer bullet"),
+        focus=focus,
+        clipboard=clipboard,
+        inserter=inserter,
+        feedback=events.append,
+    )
+
+    dictation.start()
+    dictation.finish()
+
+    assert clipboard.text == "ship the tracer bullet"
+    assert inserter.inserted is False
+    assert inserter.target == 101
+    assert events == [
+        SessionFeedback.RECORDING,
+        SessionFeedback.TRANSCRIBING,
+        SessionFeedback.CANCELLED,
+        SessionFeedback.IDLE,
+    ]
+
+
+def test_start_is_ignored_until_transcription_finishes() -> None:
+    class BlockingEngine(FakeTranscriptionEngine):
+        def __init__(self) -> None:
+            super().__init__("ship the tracer bullet")
+            self.entered = Event()
+            self.release = Event()
+
+        def transcribe(self, audio: object) -> str:
+            self.entered.set()
+            assert self.release.wait(timeout=1)
+            return super().transcribe(audio)
+
+    recorder = FakeRecorder()
+    engine = BlockingEngine()
+    dictation = DictationSession(
+        recorder=recorder,
+        transcription_engine=engine,
+        focus=FakeFocus(target=101),
+        clipboard=FakeClipboard(),
+        inserter=FakeInserter(),
+        feedback=lambda _: None,
+    )
+
+    dictation.start()
+    audio, insertion_target = dictation.begin_transcription()
+    assert recorder.started is False
+    finishing = Thread(target=dictation.finish_transcription, args=(audio, insertion_target))
+    finishing.start()
+    assert engine.entered.wait(timeout=1)
+    dictation.start()
+
+    assert recorder.starts == 1
+    engine.release.set()
+    finishing.join(timeout=1)
+    assert dictation.active is False
+
+    dictation.start()
+    assert recorder.starts == 2
 
 
 def test_no_speech_preserves_the_existing_clipboard_without_pasting() -> None:
@@ -188,4 +266,5 @@ def test_no_speech_preserves_the_existing_clipboard_without_pasting() -> None:
         SessionFeedback.RECORDING,
         SessionFeedback.TRANSCRIBING,
         SessionFeedback.NO_SPEECH,
+        SessionFeedback.IDLE,
     ]

@@ -41,9 +41,12 @@ class WindowsPaste:
     _VK_V = 0x56
     _KEYEVENTF_KEYUP = 0x0002
 
-    def paste(self) -> None:
+    def paste(self, insertion_target: object) -> bool:
+        """Paste only when the release target is still foreground and safe to receive input."""
         WindowsFocus._require_windows()
-        if self._foreground_target_is_elevated() and not self._current_process_is_elevated():
+        if WindowsFocus().foreground_target() != insertion_target:
+            return False
+        if self._target_is_elevated(insertion_target) and not self._current_process_is_elevated():
             raise PermissionError(
                 "The Insertion target is elevated and cannot receive Vellum's Ctrl+V; "
                 "the Transcript remains in the clipboard."
@@ -53,19 +56,25 @@ class WindowsPaste:
         user32.keybd_event(self._VK_V, 0, 0, 0)
         user32.keybd_event(self._VK_V, 0, self._KEYEVENTF_KEYUP, 0)
         user32.keybd_event(self._VK_CONTROL, 0, self._KEYEVENTF_KEYUP, 0)
+        return True
 
     @classmethod
-    def _foreground_target_is_elevated(cls) -> bool:
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
+    def _target_is_elevated(cls, target: object) -> bool:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        user32.GetForegroundWindow.restype = ctypes.c_void_p
         kernel32.OpenProcess.restype = wintypes.HANDLE
         process_id = wintypes.DWORD()
-        target = user32.GetForegroundWindow()
-        user32.GetWindowThreadProcessId(target, ctypes.byref(process_id))
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        if not user32.GetWindowThreadProcessId(target, ctypes.byref(process_id)):
+            raise PermissionError(
+                "Vellum could not verify the Insertion target's permissions; "
+                "the Transcript remains in the clipboard."
+            )
         process = kernel32.OpenProcess(0x1000, False, process_id.value)
         if not process:
-            return False
+            raise PermissionError(
+                "Vellum could not verify the Insertion target's permissions; "
+                "the Transcript remains in the clipboard."
+            )
         try:
             return cls._token_is_elevated(process)
         finally:
@@ -85,7 +94,7 @@ class WindowsPaste:
         advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
         token = wintypes.HANDLE()
         if not advapi32.OpenProcessToken(process, 0x0008, ctypes.byref(token)):
-            return False
+            raise PermissionError("Vellum could not verify process elevation.")
         try:
             elevation = TokenElevation()
             if not advapi32.GetTokenInformation(
@@ -95,7 +104,7 @@ class WindowsPaste:
                 ctypes.sizeof(elevation),
                 None,
             ):
-                return False
+                raise PermissionError("Vellum could not verify process elevation.")
             return bool(elevation.TokenIsElevated)
         finally:
             ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(token)

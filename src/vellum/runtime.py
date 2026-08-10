@@ -221,17 +221,29 @@ class SoundDeviceRecorder:
             ) from error
 
     def stop(self) -> np.ndarray[Any, Any]:
-        if self._stream is None:
+        stream = self._stream
+        if stream is None:
             raise RuntimeError("No microphone capture is active.")
-        self._stream.stop()
-        self._stream.close()
-        self._stream = None
+
+        try:
+            try:
+                stream.stop()
+            except Exception as stop_error:
+                try:
+                    stream.close()
+                except Exception as close_error:
+                    raise stop_error from close_error
+                raise
+            else:
+                stream.close()
+        finally:
+            self._stream = None
+            with self._lock:
+                chunks: Sequence[np.ndarray[Any, Any]] = self._chunks
+                self._chunks = []
 
         import numpy as np
 
-        with self._lock:
-            chunks: Sequence[np.ndarray[Any, Any]] = self._chunks
-            self._chunks = []
         if not chunks:
             return np.empty(0, dtype=np.float32)
         return np.concatenate(chunks, axis=0).reshape(-1)

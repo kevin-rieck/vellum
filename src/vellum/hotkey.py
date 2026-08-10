@@ -74,10 +74,17 @@ class PushToTalkHotkey:
             self._session.fail_release()
             self._on_error(error)
             return
-        Thread(target=self._finish_session, args=(insertion_target,), daemon=True).start()
-
-    def _finish_session(self, insertion_target: object) -> None:
         try:
-            self._session.finish(insertion_target)
+            audio, insertion_target = self._session.begin_transcription(insertion_target)
+        except Exception as error:
+            self._on_error(error)
+            return
+        Thread(
+            target=self._finish_session, args=(audio, insertion_target), daemon=True
+        ).start()
+
+    def _finish_session(self, audio: object, insertion_target: object) -> None:
+        try:
+            self._session.finish_transcription(audio, insertion_target)
         except Exception as error:
             self._on_error(error)
