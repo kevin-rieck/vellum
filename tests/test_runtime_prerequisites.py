@@ -47,7 +47,7 @@ def test_engine_registers_the_cuda_bin_directory_before_loading_cublas(
 
     monkeypatch.setattr(builtins, "__import__", load_faster_whisper)
 
-    FasterWhisperTranscriptionEngine(Path("large-v3-turbo"))
+    FasterWhisperTranscriptionEngine(Path("large-v3-turbo"), vocabulary_hints=("Vellum",))
 
 
 def test_cuda_preflight_registers_the_cuda_bin_directory_before_loading_ctranslate2(
@@ -130,7 +130,9 @@ def test_engine_rejects_a_cuda_runtime_that_fails_on_lazy_inference(
     )
 
     with pytest.raises(StartupPrerequisiteError) as raised:
-        FasterWhisperTranscriptionEngine(Path("large-v3-turbo"))
+        FasterWhisperTranscriptionEngine(
+            Path("large-v3-turbo"), vocabulary_hints=("Vellum",)
+        )
 
     assert raised.value.__cause__ is inference_error
 

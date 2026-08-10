@@ -13,8 +13,12 @@ class AccessDeniedError(Exception):
 
 
 class OneDimensionalAudioModel:
-    def transcribe(self, audio: object, **_: object) -> tuple[object, object]:
+    def __init__(self) -> None:
+        self.transcription_options: dict[str, object] = {}
+
+    def transcribe(self, audio: object, **kwargs: object) -> tuple[object, object]:
         assert getattr(audio, "ndim") == 1, "Input should be a 1D array"
+        self.transcription_options = kwargs
         return iter(()), object()
 
 
@@ -56,8 +60,10 @@ def test_recorder_output_can_be_transcribed_by_vad_filter(
 
     engine = FasterWhisperTranscriptionEngine.__new__(FasterWhisperTranscriptionEngine)
     engine._model = OneDimensionalAudioModel()
+    engine._hotwords = "Vellum, CTranslate2"
 
     assert engine.transcribe(recorder.stop()) == ""
+    assert engine._model.transcription_options["hotwords"] == "Vellum, CTranslate2"
 
 
 def test_recorder_explains_how_to_grant_windows_microphone_access(

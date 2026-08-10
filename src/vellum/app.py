@@ -42,7 +42,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return
         tray.fail_startup(error)
 
-    transcription_engine = AsyncFasterWhisperTranscriptionEngine(paths.model_directory, warmed)
+    transcription_engine = AsyncFasterWhisperTranscriptionEngine(
+        paths.model_directory, paths.vocabulary_hints, warmed
+    )
     session = DictationSession(
         recorder=SoundDeviceRecorder(),
         transcription_engine=transcription_engine,

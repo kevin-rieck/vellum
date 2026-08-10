@@ -19,6 +19,15 @@ class VellumPaths:
         """The local error log; it never contains audio or Transcripts."""
         return self.application_directory / "vellum.log"
 
+    @property
+    def vocabulary_hints(self) -> tuple[str, ...]:
+        """Local transcription hotwords, with optional user-provided domain terms."""
+        configured_hints = os.environ.get("VELLUM_VOCABULARY_HINTS", "")
+        additional_hints = tuple(
+            hint.strip() for hint in configured_hints.split(",") if hint.strip()
+        )
+        return ("Vellum", *additional_hints)
+
     @classmethod
     def from_environment(cls) -> VellumPaths:
         local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))

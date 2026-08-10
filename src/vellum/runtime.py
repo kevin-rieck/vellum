@@ -75,7 +75,8 @@ class WindowsPrerequisiteProbe:
 class FasterWhisperTranscriptionEngine:
     """The resident local Transcription engine required by the v1 domain model."""
 
-    def __init__(self, model_directory: Path) -> None:
+    def __init__(self, model_directory: Path, *, vocabulary_hints: Sequence[str]) -> None:
+        self._hotwords = ", ".join(vocabulary_hints)
         _register_cuda_dll_directories()
         try:
             from faster_whisper import WhisperModel
@@ -113,6 +114,7 @@ class FasterWhisperTranscriptionEngine:
             language="en",
             vad_filter=True,
             condition_on_previous_text=False,
+            hotwords=self._hotwords,
         )
         return "".join(segment.text for segment in segments)
 
@@ -120,12 +122,18 @@ class FasterWhisperTranscriptionEngine:
 class AsyncFasterWhisperTranscriptionEngine:
     """Warms the resident Transcription engine without delaying the tray startup."""
 
-    def __init__(self, model_directory: Path, on_ready: Callable[[Exception | None], None]) -> None:
+    def __init__(
+        self,
+        model_directory: Path,
+        vocabulary_hints: Sequence[str],
+        on_ready: Callable[[Exception | None], None],
+    ) -> None:
         self._ready = Event()
         self._engine: FasterWhisperTranscriptionEngine | None = None
         self._error: Exception | None = None
         self._on_ready = on_ready
         self._model_directory = model_directory
+        self._vocabulary_hints = tuple(vocabulary_hints)
         self._warming_started = False
 
     def start_warming(self) -> None:
@@ -153,7 +161,9 @@ class AsyncFasterWhisperTranscriptionEngine:
 
     def _warm(self, model_directory: Path) -> None:
         try:
-            self._engine = FasterWhisperTranscriptionEngine(model_directory)
+            self._engine = FasterWhisperTranscriptionEngine(
+                model_directory, vocabulary_hints=self._vocabulary_hints
+            )
         except Exception as error:
             self._error = error
             self._on_ready(error)
