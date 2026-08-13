@@ -16,8 +16,8 @@ class PushToTalkHotkey:
         self._session = session
         self._on_error = on_error
         self._listener: Any | None = None
-        self._ctrl_down = False
-        self._alt_down = False
+        self._ctrl_down: set[object] = set()
+        self._alt_down: set[object] = set()
         self._activation_held = False
         self._capture_active = False
         self._capture_lock = Lock()
@@ -38,21 +38,25 @@ class PushToTalkHotkey:
         alt_keys = {keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r}
 
         def on_press(key: object) -> None:
-            self._ctrl_down = self._ctrl_down or key in ctrl_keys
-            self._alt_down = self._alt_down or key in alt_keys
+            if key in ctrl_keys:
+                self._ctrl_down.add(key)
+            if key in alt_keys:
+                self._alt_down.add(key)
             if key == keyboard.Key.space and self._ctrl_down and self._alt_down:
                 self._start_session()
 
         def on_release(key: object) -> None:
-            releases_activation = key == keyboard.Key.space or key in ctrl_keys or key in alt_keys
+            if key in ctrl_keys:
+                self._ctrl_down.discard(key)
+            if key in alt_keys:
+                self._alt_down.discard(key)
+            releases_activation = (
+                key == keyboard.Key.space or not self._ctrl_down or not self._alt_down
+            )
             if releases_activation:
                 with self._capture_lock:
                     self._activation_held = False
                 self._end_capture_if_active()
-            if key in ctrl_keys:
-                self._ctrl_down = False
-            if key in alt_keys:
-                self._alt_down = False
 
         self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.start()

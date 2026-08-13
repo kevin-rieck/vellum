@@ -146,6 +146,9 @@ def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on
 
     assert recorder.starts == 2
     next_timer = timers[1]
+    Listener.instance.on_press(key.ctrl_l)
+    Listener.instance.on_release(key.ctrl_l)
+    assert recorder.stops == 1
     activation.stop()
     assert next_timer.cancelled is True
     next_timer.function()
