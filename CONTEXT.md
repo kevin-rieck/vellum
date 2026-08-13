@@ -42,7 +42,7 @@ The configurable system-wide key combination held for Push-to-talk. Its v1 defau
 _Avoid_: Shortcut, trigger key
 
 **Insertion target**:
-The foreground application associated with a Dictation session when its Push-to-talk hotkey is released. Text insertion is cancelled if that application no longer has focus when the Transcript is ready.
+The foreground application associated with a Dictation session when microphone capture ends, either at Push-to-talk hotkey release or at the 60-second duration limit. Text insertion is cancelled if that application no longer has focus when the Transcript is ready.
 _Avoid_: Current focus, destination
 
 **Session feedback**:

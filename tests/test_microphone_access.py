@@ -66,6 +66,55 @@ def test_recorder_output_can_be_transcribed_by_vad_filter(
     assert engine._model.transcription_options["hotwords"] == "Vellum, CTranslate2"
 
 
+def test_recorder_limits_retained_audio_to_its_configured_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import numpy as np
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=CapturingInputStream, PortAudioError=Exception),
+    )
+    recorder = SoundDeviceRecorder(sample_rate=2, maximum_seconds=1)
+    recorder.start()
+    assert CapturingInputStream.instance is not None
+    CapturingInputStream.instance.callback(
+        np.array([[0.1], [0.2], [0.3]], dtype=np.float32), 3, None, None
+    )
+    CapturingInputStream.instance.callback(np.array([[0.4]], dtype=np.float32), 1, None, None)
+
+    assert np.array_equal(recorder.stop(), np.array([0.1, 0.2], dtype=np.float32))
+
+
+@pytest.mark.parametrize("failure", ["stop", "close"])
+def test_recorder_releases_audio_when_stream_shutdown_fails(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    class FailingInputStream(CapturingInputStream):
+        def stop(self) -> None:
+            if failure == "stop":
+                raise RuntimeError("stop failed")
+
+        def close(self) -> None:
+            if failure == "close":
+                raise RuntimeError("close failed")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FailingInputStream, PortAudioError=Exception),
+    )
+    recorder = SoundDeviceRecorder()
+    recorder.start()
+
+    with pytest.raises(RuntimeError, match=f"{failure} failed"):
+        recorder.stop()
+
+    assert recorder._stream is None
+    assert recorder._chunks == []
+
+
 def test_recorder_explains_how_to_grant_windows_microphone_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

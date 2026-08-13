@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
 type Audio = object
 type InsertionTarget = object
+
+MAXIMUM_DICTATION_SECONDS = 60
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTranscription:
+    """Stopped audio paired with its capture-end Insertion target."""
+
+    audio: Audio
+    insertion_target: InsertionTarget
 
 
 class Recorder(Protocol):
@@ -29,7 +40,7 @@ class Clipboard(Protocol):
 
 
 class Inserter(Protocol):
-    def paste(self) -> None: ...
+    def paste(self, insertion_target: InsertionTarget) -> bool: ...
 
 
 class SessionFeedback(Enum):
@@ -44,7 +55,7 @@ class SessionFeedback(Enum):
 class DictationSession:
     """Runs one Push-to-talk Dictation session at a time.
 
-    The insertion target is captured at hotkey release, before transcription.
+    The insertion target is captured when microphone capture ends, before transcription.
     Clipboard copy deliberately precedes the focus recheck so a cancelled insertion
     still leaves the Transcript available to the user.
     """
@@ -95,56 +106,65 @@ class DictationSession:
             self._active = False
             raise
 
-    def capture_insertion_target(self) -> InsertionTarget:
-        """Capture the foreground application at the precise hotkey-release boundary."""
-        if not self._active:
-            raise RuntimeError("No Dictation session is active.")
-        return self._focus.foreground_target()
+    def end_capture(self) -> PendingTranscription:
+        """Stop capture and identify its foreground Insertion target.
 
-    def fail_release(self) -> None:
-        """Close capture if the release-time Insertion target cannot be identified."""
-        if not self._active:
-            return
-        try:
-            self._recorder.stop()
-        finally:
-            self._active = False
-            self._feedback(SessionFeedback.ERROR)
-
-    def finish(self, insertion_target: InsertionTarget | None = None) -> None:
-        """End capture, transcribe locally, then insert only into the release target.
-
-        The hotkey adapter supplies the target captured in its release callback.
-        The optional fallback keeps this public seam convenient for direct callers.
+        The session remains active until :meth:`finish_transcription` completes, so
+        a second Push-to-talk activation cannot queue or overlap while transcription
+        is in progress.
         """
         if not self._active:
-            return
+            raise RuntimeError("No Dictation session is active.")
 
         capture_stopped = False
         try:
-            if insertion_target is None:
-                insertion_target = self.capture_insertion_target()
             audio = self._recorder.stop()
             capture_stopped = True
+            insertion_target = self._focus.foreground_target()
             self._feedback(SessionFeedback.TRANSCRIBING)
-            transcript = self._transcription_engine.transcribe(audio)
-            if not transcript.strip():
-                self._feedback(SessionFeedback.NO_SPEECH)
-                return
-
-            self._clipboard.copy(transcript)
-            if self._focus.foreground_target() != insertion_target:
-                self._feedback(SessionFeedback.CANCELLED)
-                return
-            self._inserter.paste()
-            self._feedback(SessionFeedback.IDLE)
+            return PendingTranscription(audio, insertion_target)
         except Exception:
             if not capture_stopped:
                 try:
                     self._recorder.stop()
                 except Exception:
                     pass
+            self._active = False
+            self._feedback(SessionFeedback.ERROR)
+            raise
+
+    def finish_transcription(self, pending: PendingTranscription) -> None:
+        """Transcribe stopped audio and insert only into its capture-end target."""
+        if not self._active:
+            return
+
+        try:
+            transcript = self._transcription_engine.transcribe(pending.audio)
+            if not transcript.strip():
+                self._feedback(SessionFeedback.NO_SPEECH)
+                self._feedback(SessionFeedback.IDLE)
+                return
+
+            self._clipboard.copy(transcript)
+            if self._focus.foreground_target() != pending.insertion_target:
+                self._cancel_insertion()
+                return
+            if not self._inserter.paste(pending.insertion_target):
+                self._cancel_insertion()
+                return
+            self._feedback(SessionFeedback.IDLE)
+        except Exception:
             self._feedback(SessionFeedback.ERROR)
             raise
         finally:
             self._active = False
+
+    def _cancel_insertion(self) -> None:
+        self._feedback(SessionFeedback.CANCELLED)
+        self._feedback(SessionFeedback.IDLE)
+
+    def finish(self) -> None:
+        """Synchronously end capture and complete its local transcription."""
+        if not self._active:
+            return
+        self.finish_transcription(self.end_capture())
