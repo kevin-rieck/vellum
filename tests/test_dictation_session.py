@@ -177,7 +177,7 @@ def test_release_target_failure_closes_capture() -> None:
     dictation, _, _ = session(focus=focus, feedback=events.append)
 
     dictation.start()
-    dictation.fail_release()
+    dictation.fail_capture_end()
 
     assert dictation.active is False
     assert events == [SessionFeedback.RECORDING, SessionFeedback.ERROR]
@@ -235,9 +235,9 @@ def test_start_is_ignored_until_transcription_finishes() -> None:
     )
 
     dictation.start()
-    audio, insertion_target = dictation.begin_transcription()
+    pending = dictation.begin_transcription()
     assert recorder.started is False
-    finishing = Thread(target=dictation.finish_transcription, args=(audio, insertion_target))
+    finishing = Thread(target=dictation.finish_transcription, args=(pending,))
     finishing.start()
     assert engine.entered.wait(timeout=1)
     dictation.start()

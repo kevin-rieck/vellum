@@ -6,11 +6,13 @@ import ctypes
 import sys
 from ctypes import wintypes
 
+from vellum.session import InsertionTarget
+
 
 class WindowsFocus:
     """Identifies an Insertion target by its foreground window handle."""
 
-    def foreground_target(self) -> int:
+    def foreground_target(self) -> InsertionTarget:
         self._require_windows()
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         user32.GetForegroundWindow.restype = ctypes.c_void_p
@@ -41,8 +43,8 @@ class WindowsPaste:
     _VK_V = 0x56
     _KEYEVENTF_KEYUP = 0x0002
 
-    def paste(self, insertion_target: object) -> bool:
-        """Paste only when the release target is still foreground and safe to receive input."""
+    def paste(self, insertion_target: InsertionTarget) -> bool:
+        """Paste only when the capture-end target is still foreground and safe."""
         WindowsFocus._require_windows()
         if WindowsFocus().foreground_target() != insertion_target:
             return False
@@ -59,7 +61,7 @@ class WindowsPaste:
         return True
 
     @classmethod
-    def _target_is_elevated(cls, target: object) -> bool:
+    def _target_is_elevated(cls, target: InsertionTarget) -> bool:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.OpenProcess.restype = wintypes.HANDLE
         process_id = wintypes.DWORD()

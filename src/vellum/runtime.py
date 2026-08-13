@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
+from vellum.session import MAXIMUM_DICTATION_SECONDS, Audio
 from vellum.startup import StartupPrerequisiteError
 
 if TYPE_CHECKING:
@@ -108,7 +109,7 @@ class FasterWhisperTranscriptionEngine:
         )
         next(iter(segments), None)
 
-    def transcribe(self, audio: object) -> str:
+    def transcribe(self, audio: Audio) -> str:
         segments, _ = self._model.transcribe(
             audio,
             language="en",
@@ -153,7 +154,7 @@ class AsyncFasterWhisperTranscriptionEngine:
         if self._engine is None:
             raise RuntimeError("The local Transcription engine did not finish warming.")
 
-    def transcribe(self, audio: object) -> str:
+    def transcribe(self, audio: Audio) -> str:
         self.wait_until_ready()
         if self._engine is None:
             raise RuntimeError("The local Transcription engine did not finish warming.")
@@ -176,7 +177,12 @@ class AsyncFasterWhisperTranscriptionEngine:
 class SoundDeviceRecorder:
     """Captures one in-memory microphone stream, limited to 60 seconds."""
 
-    def __init__(self, *, sample_rate: int = 16_000, maximum_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16_000,
+        maximum_seconds: int = MAXIMUM_DICTATION_SECONDS,
+    ) -> None:
         self._sample_rate = sample_rate
         self._maximum_frames = sample_rate * maximum_seconds
         self._chunks: list[np.ndarray[Any, Any]] = []

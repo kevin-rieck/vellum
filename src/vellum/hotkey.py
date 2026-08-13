@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from threading import Thread
+from threading import Lock, Thread, Timer
 from typing import Any
 
-from vellum.session import DictationSession
+from vellum.session import MAXIMUM_DICTATION_SECONDS, DictationSession, PendingTranscription
 
 
 class PushToTalkHotkey:
-    """Starts at the default Activation hotkey press and finishes on its release."""
+    """Starts on Activation hotkey press and ends on release or the duration limit."""
 
     def __init__(self, session: DictationSession, on_error: Callable[[Exception], None]) -> None:
         self._session = session
@@ -18,7 +18,10 @@ class PushToTalkHotkey:
         self._listener: Any | None = None
         self._ctrl_down = False
         self._alt_down = False
-        self._awaiting_release = False
+        self._activation_held = False
+        self._capture_active = False
+        self._capture_lock = Lock()
+        self._limit_timer: Timer | None = None
         self._enabled = False
 
     def enable(self) -> None:
@@ -42,9 +45,10 @@ class PushToTalkHotkey:
 
         def on_release(key: object) -> None:
             releases_activation = key == keyboard.Key.space or key in ctrl_keys or key in alt_keys
-            if releases_activation and self._awaiting_release:
-                self._awaiting_release = False
-                self._finish_from_release()
+            if releases_activation:
+                with self._capture_lock:
+                    self._activation_held = False
+                self._finish_if_recording()
             if key in ctrl_keys:
                 self._ctrl_down = False
             if key in alt_keys:
@@ -59,32 +63,52 @@ class PushToTalkHotkey:
             self._listener = None
 
     def _start_session(self) -> None:
-        if not self._enabled or self._session.active:
+        if not self._enabled:
+            return
+        with self._capture_lock:
+            if self._activation_held:
+                return
+            self._activation_held = True
+        if self._session.active:
             return
         try:
             self._session.start()
-            self._awaiting_release = True
+            with self._capture_lock:
+                self._capture_active = True
+                timer = Timer(MAXIMUM_DICTATION_SECONDS, self._finish_if_recording)
+                self._limit_timer = timer
+            timer.start()
         except Exception as error:
             self._on_error(error)
 
-    def _finish_from_release(self) -> None:
+    def _finish_if_recording(self) -> None:
+        """End capture once, whether hotkey release or the duration limit wins."""
+        with self._capture_lock:
+            if not self._capture_active:
+                return
+            self._capture_active = False
+            timer = self._limit_timer
+            self._limit_timer = None
+        if timer is not None:
+            timer.cancel()
+        self._finish_recording()
+
+    def _finish_recording(self) -> None:
         try:
             insertion_target = self._session.capture_insertion_target()
         except Exception as error:
-            self._session.fail_release()
+            self._session.fail_capture_end()
             self._on_error(error)
             return
         try:
-            audio, insertion_target = self._session.begin_transcription(insertion_target)
+            pending = self._session.begin_transcription(insertion_target)
         except Exception as error:
             self._on_error(error)
             return
-        Thread(
-            target=self._finish_session, args=(audio, insertion_target), daemon=True
-        ).start()
+        Thread(target=self._finish_session, args=(pending,), daemon=True).start()
 
-    def _finish_session(self, audio: object, insertion_target: object) -> None:
+    def _finish_session(self, pending: PendingTranscription) -> None:
         try:
-            self._session.finish_transcription(audio, insertion_target)
+            self._session.finish_transcription(pending)
         except Exception as error:
             self._on_error(error)

@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
 type Audio = object
 type InsertionTarget = object
+
+MAXIMUM_DICTATION_SECONDS = 60
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTranscription:
+    """Stopped audio paired with its capture-end Insertion target."""
+
+    audio: Audio
+    insertion_target: InsertionTarget
 
 
 class Recorder(Protocol):
@@ -44,7 +55,7 @@ class SessionFeedback(Enum):
 class DictationSession:
     """Runs one Push-to-talk Dictation session at a time.
 
-    The insertion target is captured at hotkey release, before transcription.
+    The insertion target is captured when microphone capture ends, before transcription.
     Clipboard copy deliberately precedes the focus recheck so a cancelled insertion
     still leaves the Transcript available to the user.
     """
@@ -96,13 +107,13 @@ class DictationSession:
             raise
 
     def capture_insertion_target(self) -> InsertionTarget:
-        """Capture the foreground application at the precise hotkey-release boundary."""
+        """Capture the foreground application at the precise capture-end boundary."""
         if not self._active:
             raise RuntimeError("No Dictation session is active.")
         return self._focus.foreground_target()
 
-    def fail_release(self) -> None:
-        """Close capture if the release-time Insertion target cannot be identified."""
+    def fail_capture_end(self) -> None:
+        """Close capture if its endpoint Insertion target cannot be identified."""
         if not self._active:
             return
         try:
@@ -113,8 +124,8 @@ class DictationSession:
 
     def begin_transcription(
         self, insertion_target: InsertionTarget | None = None
-    ) -> tuple[Audio, InsertionTarget]:
-        """Stop capture at release and return its in-memory audio for transcription.
+    ) -> PendingTranscription:
+        """Stop capture and return its in-memory audio for transcription.
 
         The session remains active until :meth:`finish_transcription` completes, so
         a second Push-to-talk activation cannot queue or overlap while transcription
@@ -130,7 +141,7 @@ class DictationSession:
             audio = self._recorder.stop()
             capture_stopped = True
             self._feedback(SessionFeedback.TRANSCRIBING)
-            return audio, insertion_target
+            return PendingTranscription(audio, insertion_target)
         except Exception:
             if not capture_stopped:
                 try:
@@ -141,24 +152,24 @@ class DictationSession:
             self._feedback(SessionFeedback.ERROR)
             raise
 
-    def finish_transcription(self, audio: Audio, insertion_target: InsertionTarget) -> None:
-        """Transcribe already-stopped audio and insert only into the release target."""
+    def finish_transcription(self, pending: PendingTranscription) -> None:
+        """Transcribe stopped audio and insert only into its capture-end target."""
         if not self._active:
             return
 
         try:
-            transcript = self._transcription_engine.transcribe(audio)
+            transcript = self._transcription_engine.transcribe(pending.audio)
             if not transcript.strip():
                 self._feedback(SessionFeedback.NO_SPEECH)
                 self._feedback(SessionFeedback.IDLE)
                 return
 
             self._clipboard.copy(transcript)
-            if self._focus.foreground_target() != insertion_target:
+            if self._focus.foreground_target() != pending.insertion_target:
                 self._feedback(SessionFeedback.CANCELLED)
                 self._feedback(SessionFeedback.IDLE)
                 return
-            if not self._inserter.paste(insertion_target):
+            if not self._inserter.paste(pending.insertion_target):
                 self._feedback(SessionFeedback.CANCELLED)
                 self._feedback(SessionFeedback.IDLE)
                 return
@@ -173,5 +184,5 @@ class DictationSession:
         """Synchronously end capture and complete its local transcription."""
         if not self._active:
             return
-        audio, insertion_target = self.begin_transcription(insertion_target)
-        self.finish_transcription(audio, insertion_target)
+        pending = self.begin_transcription(insertion_target)
+        self.finish_transcription(pending)
