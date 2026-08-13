@@ -48,7 +48,7 @@ class PushToTalkHotkey:
             if releases_activation:
                 with self._capture_lock:
                     self._activation_held = False
-                self._finish_if_recording()
+                self._end_capture_if_active()
             if key in ctrl_keys:
                 self._ctrl_down = False
             if key in alt_keys:
@@ -61,27 +61,33 @@ class PushToTalkHotkey:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        with self._capture_lock:
+            timer = self._limit_timer
+            self._limit_timer = None
+            self._capture_active = False
+        if timer is not None:
+            timer.cancel()
 
     def _start_session(self) -> None:
         if not self._enabled:
             return
-        with self._capture_lock:
-            if self._activation_held:
-                return
-            self._activation_held = True
-        if self._session.active:
-            return
         try:
-            self._session.start()
             with self._capture_lock:
+                if self._activation_held:
+                    return
+                self._activation_held = True
+                if self._session.active:
+                    return
+                self._session.start()
                 self._capture_active = True
-                timer = Timer(MAXIMUM_DICTATION_SECONDS, self._finish_if_recording)
+                timer = Timer(MAXIMUM_DICTATION_SECONDS, self._end_capture_if_active)
                 self._limit_timer = timer
-            timer.start()
         except Exception as error:
             self._on_error(error)
+            return
+        timer.start()
 
-    def _finish_if_recording(self) -> None:
+    def _end_capture_if_active(self) -> None:
         """End capture once, whether hotkey release or the duration limit wins."""
         with self._capture_lock:
             if not self._capture_active:
@@ -91,17 +97,11 @@ class PushToTalkHotkey:
             self._limit_timer = None
         if timer is not None:
             timer.cancel()
-        self._finish_recording()
+        self._end_capture()
 
-    def _finish_recording(self) -> None:
+    def _end_capture(self) -> None:
         try:
-            insertion_target = self._session.capture_insertion_target()
-        except Exception as error:
-            self._session.fail_capture_end()
-            self._on_error(error)
-            return
-        try:
-            pending = self._session.begin_transcription(insertion_target)
+            pending = self._session.end_capture()
         except Exception as error:
             self._on_error(error)
             return

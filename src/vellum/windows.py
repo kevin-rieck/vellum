@@ -53,6 +53,8 @@ class WindowsPaste:
                 "The Insertion target is elevated and cannot receive Vellum's Ctrl+V; "
                 "the Transcript remains in the clipboard."
             )
+        if WindowsFocus().foreground_target() != insertion_target:
+            return False
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         user32.keybd_event(self._VK_CONTROL, 0, 0, 0)
         user32.keybd_event(self._VK_V, 0, 0, 0)

@@ -1,31 +1,30 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
 
 from vellum import hotkey
 from vellum.hotkey import PushToTalkHotkey
-from vellum.session import DictationSession, PendingTranscription
+from vellum.session import DictationSession
 
 
 class FakeRecorder:
     def __init__(self) -> None:
         self.stopped = False
         self.starts = 0
+        self.stops = 0
 
     def start(self) -> None:
         self.starts += 1
 
     def stop(self) -> bytes:
         self.stopped = True
+        self.stops += 1
         return b"spoken audio"
-
-
-class FakeEngine:
-    def transcribe(self, audio: object) -> str:
-        raise AssertionError("Transcription must run on the background thread.")
 
 
 class SuccessfulFakeEngine:
@@ -58,7 +57,7 @@ class DeferredThread:
         pass
 
 
-def test_hotkey_stops_capture_at_the_session_duration_limit(
+def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     DeferredThread.started = []
@@ -76,6 +75,34 @@ def test_hotkey_stops_capture_at_the_session_duration_limit(
         def cancel(self) -> None:
             self.cancelled = True
 
+    class Listener:
+        instance: ClassVar[Listener | None] = None
+
+        def __init__(
+            self,
+            *,
+            on_press: Callable[[object], None],
+            on_release: Callable[[object], None],
+        ) -> None:
+            self.on_press = on_press
+            self.on_release = on_release
+            type(self).instance = self
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    key = SimpleNamespace(
+        ctrl=object(),
+        ctrl_l=object(),
+        ctrl_r=object(),
+        alt=object(),
+        alt_l=object(),
+        alt_r=object(),
+        space=object(),
+    )
     timers: list[DeferredTimer] = []
     recorder = FakeRecorder()
     session = DictationSession(
@@ -86,53 +113,40 @@ def test_hotkey_stops_capture_at_the_session_duration_limit(
         inserter=FakeInserter(),
         feedback=lambda _: None,
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "pynput",
+        SimpleNamespace(keyboard=SimpleNamespace(Key=key, Listener=Listener)),
+    )
     monkeypatch.setattr(hotkey, "Timer", DeferredTimer)
     monkeypatch.setattr(hotkey, "Thread", DeferredThread)
     activation = PushToTalkHotkey(session, lambda _: None)
     activation.enable()
+    activation.start()
 
-    activation._start_session()
+    assert Listener.instance is not None
+    Listener.instance.on_press(key.ctrl)
+    Listener.instance.on_press(key.alt)
+    Listener.instance.on_press(key.space)
     assert len(timers) == 1
+
     timer = timers[0]
     timer.function()
 
     assert recorder.stopped is True
+    assert recorder.stops == 1
     assert timer.cancelled is True
     assert len(DeferredThread.started) == 1
 
     finish, args, _ = DeferredThread.started[0]
     assert callable(finish)
     finish(*args)
-    activation._start_session()
+    Listener.instance.on_release(key.space)
+    Listener.instance.on_press(key.space)
 
-    assert recorder.starts == 1
-
-
-def test_hotkey_stops_capture_before_starting_the_transcription_thread(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    DeferredThread.started = []
-    recorder = FakeRecorder()
-    session = DictationSession(
-        recorder=recorder,
-        transcription_engine=FakeEngine(),
-        focus=FakeFocus(),
-        clipboard=FakeClipboard(),
-        inserter=FakeInserter(),
-        feedback=lambda _: None,
-    )
-    session.start()
-    monkeypatch.setattr(hotkey, "Thread", DeferredThread)
-
-    PushToTalkHotkey(session, lambda _: None)._finish_recording()
-
-    assert recorder.stopped is True
-    assert session.active is True
-    assert len(DeferredThread.started) == 1
-    _, args, daemon = DeferredThread.started[0]
-    assert len(args) == 1
-    pending = args[0]
-    assert isinstance(pending, PendingTranscription)
-    assert pending.audio == b"spoken audio"
-    assert pending.insertion_target == 101
-    assert daemon is True
+    assert recorder.starts == 2
+    next_timer = timers[1]
+    activation.stop()
+    assert next_timer.cancelled is True
+    next_timer.function()
+    assert recorder.stops == 1

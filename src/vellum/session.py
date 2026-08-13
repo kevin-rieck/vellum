@@ -106,26 +106,8 @@ class DictationSession:
             self._active = False
             raise
 
-    def capture_insertion_target(self) -> InsertionTarget:
-        """Capture the foreground application at the precise capture-end boundary."""
-        if not self._active:
-            raise RuntimeError("No Dictation session is active.")
-        return self._focus.foreground_target()
-
-    def fail_capture_end(self) -> None:
-        """Close capture if its endpoint Insertion target cannot be identified."""
-        if not self._active:
-            return
-        try:
-            self._recorder.stop()
-        finally:
-            self._active = False
-            self._feedback(SessionFeedback.ERROR)
-
-    def begin_transcription(
-        self, insertion_target: InsertionTarget | None = None
-    ) -> PendingTranscription:
-        """Stop capture and return its in-memory audio for transcription.
+    def end_capture(self) -> PendingTranscription:
+        """Stop capture and identify its foreground Insertion target.
 
         The session remains active until :meth:`finish_transcription` completes, so
         a second Push-to-talk activation cannot queue or overlap while transcription
@@ -136,10 +118,9 @@ class DictationSession:
 
         capture_stopped = False
         try:
-            if insertion_target is None:
-                insertion_target = self.capture_insertion_target()
             audio = self._recorder.stop()
             capture_stopped = True
+            insertion_target = self._focus.foreground_target()
             self._feedback(SessionFeedback.TRANSCRIBING)
             return PendingTranscription(audio, insertion_target)
         except Exception:
@@ -166,12 +147,10 @@ class DictationSession:
 
             self._clipboard.copy(transcript)
             if self._focus.foreground_target() != pending.insertion_target:
-                self._feedback(SessionFeedback.CANCELLED)
-                self._feedback(SessionFeedback.IDLE)
+                self._cancel_insertion()
                 return
             if not self._inserter.paste(pending.insertion_target):
-                self._feedback(SessionFeedback.CANCELLED)
-                self._feedback(SessionFeedback.IDLE)
+                self._cancel_insertion()
                 return
             self._feedback(SessionFeedback.IDLE)
         except Exception:
@@ -180,9 +159,12 @@ class DictationSession:
         finally:
             self._active = False
 
-    def finish(self, insertion_target: InsertionTarget | None = None) -> None:
+    def _cancel_insertion(self) -> None:
+        self._feedback(SessionFeedback.CANCELLED)
+        self._feedback(SessionFeedback.IDLE)
+
+    def finish(self) -> None:
         """Synchronously end capture and complete its local transcription."""
         if not self._active:
             return
-        pending = self.begin_transcription(insertion_target)
-        self.finish_transcription(pending)
+        self.finish_transcription(self.end_capture())

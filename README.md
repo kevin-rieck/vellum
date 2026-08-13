@@ -4,7 +4,7 @@ Vellum is a Windows-first, local-only Push-to-talk dictation application. Hold
 **Ctrl+Alt+Space**, speak, and release it to transcribe with the local
 `large-v3-turbo` model. Vellum copies the resulting English Transcript to the
 system clipboard and sends Ctrl+V only if the foreground Insertion target is
-the same window that was focused at release.
+the same window that was focused when microphone capture ended.
 
 ## Tracer-bullet setup
 
@@ -44,7 +44,7 @@ the hotkey is used. The log never contains audio or Transcripts.
 ## Development
 
 The agreed verification seams are startup prerequisite validation and the
-`DictationSession` lifecycle (release target capture through clipboard-backed
+`DictationSession` lifecycle (capture-end Insertion target identification through
 Text insertion). They are deliberately platform-independent; the Windows
 adapters are kept behind those seams.
 
