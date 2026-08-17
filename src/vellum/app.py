@@ -39,11 +39,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
         settings_load_error = error
 
     try:
-        require_startup_prerequisites(WindowsPrerequisiteProbe(paths.model_directory))
         tray = TrayApplication(settings)
-    except (RuntimeError, StartupPrerequisiteError) as error:
+    except RuntimeError as error:
         log_error(error)
         return 2
+
+    model_directory = paths.model_directory_for(settings.transcription_model)
+    try:
+        require_startup_prerequisites(WindowsPrerequisiteProbe(model_directory))
+    except (RuntimeError, StartupPrerequisiteError) as error:
+        tray.fail_startup(error)
+        return 0 if tray.run() else 2
 
     recorder = SoundDeviceRecorder(input_device=settings.input_device)
 
@@ -55,7 +61,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         tray.fail_startup(error)
 
     transcription_engine = AsyncFasterWhisperTranscriptionEngine(
-        paths.model_directory, paths.vocabulary_hints, warmed
+        model_directory, settings.vocabulary_hints, warmed
     )
     session = DictationSession(
         recorder=recorder,
@@ -75,6 +81,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     def apply_settings(updated_settings: Settings) -> None:
         recorder.set_input_device(updated_settings.input_device)
         hotkey.configure(updated_settings.activation_hotkey)
+        transcription_engine.set_vocabulary_hints(updated_settings.vocabulary_hints)
         tray.apply_settings(updated_settings)
 
     settings_controller = SettingsController(

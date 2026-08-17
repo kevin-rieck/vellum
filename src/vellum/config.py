@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_SETTINGS_VERSION = 1
+_SETTINGS_VERSION = 2
+_LEGACY_SETTINGS_VERSION = 1
+TRANSCRIPTION_MODELS = ("large-v3-turbo",)
+DEFAULT_VOCABULARY_HINTS = ("Vellum", "CTranslate2", "CUDA", "Python", "GitHub")
 _MODIFIER_ORDER = ("Ctrl", "Alt", "Shift", "Win")
 _MODIFIER_ALIASES = {
     "ctrl": "Ctrl",
@@ -88,6 +91,33 @@ def _normalise_activation_key(value: str) -> str:
     )
 
 
+def _normalise_transcription_model(value: object) -> str:
+    if not isinstance(value, str) or value not in TRANSCRIPTION_MODELS:
+        raise SettingsError(
+            "The Transcription engine model must be one of: "
+            f"{', '.join(TRANSCRIPTION_MODELS)}."
+        )
+    return value
+
+
+def normalise_vocabulary_hints(value: object) -> tuple[str, ...]:
+    """Return trimmed, distinct Vocabulary hints in their configured order."""
+    if not isinstance(value, (list, tuple)):
+        raise SettingsError("Vocabulary hints must be a list of text terms.")
+
+    hints: list[str] = []
+    seen_hints: set[str] = set()
+    for hint in value:
+        if not isinstance(hint, str) or not (normalised_hint := hint.strip()):
+            raise SettingsError("Each Vocabulary hint must be non-empty text.")
+        identity = normalised_hint.casefold()
+        if identity in seen_hints:
+            raise SettingsError("Vocabulary hints must not repeat a term.")
+        seen_hints.add(identity)
+        hints.append(normalised_hint)
+    return tuple(hints)
+
+
 @dataclass(frozen=True, slots=True)
 class InputDevice:
     """A stable description of a user-selected microphone.
@@ -114,10 +144,12 @@ class InputDevice:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    """The four user preferences required for the Vellum tray application."""
+    """The user preferences required for the Vellum Tray application."""
 
     input_device: InputDevice | None = None
     activation_hotkey: str = "Ctrl+Alt+Space"
+    transcription_model: str = "large-v3-turbo"
+    vocabulary_hints: tuple[str, ...] = DEFAULT_VOCABULARY_HINTS
     sounds_enabled: bool = True
     start_at_sign_in: bool = False
 
@@ -128,6 +160,12 @@ class Settings:
             )
         object.__setattr__(
             self, "activation_hotkey", normalise_activation_hotkey(self.activation_hotkey)
+        )
+        object.__setattr__(
+            self, "transcription_model", _normalise_transcription_model(self.transcription_model)
+        )
+        object.__setattr__(
+            self, "vocabulary_hints", normalise_vocabulary_hints(self.vocabulary_hints)
         )
         if not isinstance(self.sounds_enabled, bool):
             raise SettingsError("The sounds preference must be true or false.")
@@ -143,6 +181,8 @@ class Settings:
                 else {"name": self.input_device.name, "host_api": self.input_device.host_api}
             ),
             "activation_hotkey": self.activation_hotkey,
+            "transcription_model": self.transcription_model,
+            "vocabulary_hints": list(self.vocabulary_hints),
             "sounds_enabled": self.sounds_enabled,
             "start_at_sign_in": self.start_at_sign_in,
         }
@@ -151,7 +191,8 @@ class Settings:
     def from_json(cls, value: object) -> Settings:
         if not isinstance(value, dict):
             raise SettingsError("Settings must be a JSON object.")
-        if value.get("version") != _SETTINGS_VERSION:
+        version = value.get("version")
+        if version not in (_LEGACY_SETTINGS_VERSION, _SETTINGS_VERSION):
             raise SettingsError("Settings use an unsupported version.")
 
         input_device_value = value.get("input_device")
@@ -169,6 +210,16 @@ class Settings:
         return cls(
             input_device=input_device,
             activation_hotkey=_required_string(value, "activation_hotkey", "Settings"),
+            transcription_model=(
+                "large-v3-turbo"
+                if version == _LEGACY_SETTINGS_VERSION
+                else _required_string(value, "transcription_model", "Settings")
+            ),
+            vocabulary_hints=(
+                DEFAULT_VOCABULARY_HINTS
+                if version == _LEGACY_SETTINGS_VERSION
+                else _required_vocabulary_hints(value)
+            ),
             sounds_enabled=_required_bool(value, "sounds_enabled"),
             start_at_sign_in=_required_bool(value, "start_at_sign_in"),
         )
@@ -179,6 +230,13 @@ def _required_string(value: dict[str, Any], key: str, owner: str) -> str:
     if not isinstance(item, str):
         raise SettingsError(f"{owner} {key.replace('_', ' ')} must be text.")
     return item
+
+
+def _required_vocabulary_hints(value: dict[str, Any]) -> tuple[str, ...]:
+    item = value.get("vocabulary_hints")
+    if not isinstance(item, list):
+        raise SettingsError("Settings vocabulary hints must be a list.")
+    return normalise_vocabulary_hints(item)
 
 
 def _required_bool(value: dict[str, Any], key: str) -> bool:
@@ -255,14 +313,12 @@ class VellumPaths:
         """The user-owned file containing Vellum preferences, not session data."""
         return self.application_directory / "settings.json"
 
-    @property
-    def vocabulary_hints(self) -> tuple[str, ...]:
-        """Local transcription hotwords, with optional user-provided domain terms."""
-        configured_hints = os.environ.get("VELLUM_VOCABULARY_HINTS", "")
-        additional_hints = tuple(
-            hint.strip() for hint in configured_hints.split(",") if hint.strip()
-        )
-        return ("Vellum", *additional_hints)
+    def model_directory_for(self, transcription_model: str) -> Path:
+        """Locate the selected local Transcription engine model."""
+        model = _normalise_transcription_model(transcription_model)
+        if self.model_directory.name == model:
+            return self.model_directory
+        return self.model_directory.parent / model
 
     @classmethod
     def from_environment(cls) -> VellumPaths:

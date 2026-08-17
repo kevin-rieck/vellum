@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any
 
 from vellum.config import Settings
@@ -28,6 +29,9 @@ class TrayApplication:
         self._settings_controller: SettingsController | None = None
         self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
+        self._icon_registered = False
+        self._notification_lock = Lock()
+        self._pending_notifications: list[tuple[str, str]] = []
         self._images = {
             SessionFeedback.IDLE: self._image(Image, ImageDraw, "#3b82f6"),
             SessionFeedback.RECORDING: self._image(Image, ImageDraw, "#dc2626"),
@@ -56,24 +60,26 @@ class TrayApplication:
         if self._icon.icon == self._images[SessionFeedback.IDLE]:
             self._icon.title = self._ready_title()
 
-    def run(self, hotkey: PushToTalkHotkey) -> bool:
+    def run(self, hotkey: PushToTalkHotkey | None = None) -> bool:
+        """Register the tray icon before delivering any queued notifications."""
         self._hotkey = hotkey
-        if self._startup_failed:
-            return False
-        hotkey.start()
-        if self._startup_failed:
-            hotkey.stop()
-            return False
-        self._icon.run()
+        if hotkey is not None and not self._startup_failed:
+            try:
+                hotkey.start()
+            except Exception as error:
+                self.fail_startup(error)
+        self._icon.run(self._on_icon_ready)
         return not self._startup_failed
 
     def warming(self) -> None:
         self._icon.title = "Vellum — warming local Transcription engine"
 
     def fail_startup(self, error: Exception) -> None:
+        """Keep an error-state Tray application available until the user quits."""
         self._startup_failed = True
+        if self._hotkey is not None:
+            self._hotkey.stop()
         self.report_error(error)
-        self._icon.stop()
 
     def feedback(self, feedback: SessionFeedback) -> None:
         if feedback is SessionFeedback.RECORDING:
@@ -87,12 +93,12 @@ class TrayApplication:
             else f"Vellum — {feedback.value}"
         )
         if feedback is SessionFeedback.CANCELLED:
-            self._icon.notify(
+            self._notify(
                 "The insertion target changed. The Transcript is available in the clipboard.",
                 "Vellum insertion cancelled",
             )
         elif feedback is SessionFeedback.NO_SPEECH:
-            self._icon.notify(
+            self._notify(
                 "No usable speech was detected; the clipboard was not changed.", "Vellum"
             )
 
@@ -100,7 +106,24 @@ class TrayApplication:
         """Show and persist failures raised during a Dictation session."""
         log_error(error)
         self.feedback(SessionFeedback.ERROR)
-        self._icon.notify(str(error), "Vellum error")
+        self._notify(str(error), "Vellum error")
+
+    def _on_icon_ready(self, icon: Any) -> None:
+        """Make the icon visible, then deliver notifications queued during startup."""
+        icon.visible = True
+        with self._notification_lock:
+            self._icon_registered = True
+            pending_notifications = self._pending_notifications
+            self._pending_notifications = []
+        for message, title in pending_notifications:
+            icon.notify(message, title)
+
+    def _notify(self, message: str, title: str) -> None:
+        with self._notification_lock:
+            if not self._icon_registered:
+                self._pending_notifications.append((message, title))
+                return
+        self._icon.notify(message, title)
 
     def _open_settings(self, icon: Any, item: Any) -> None:
         del icon, item

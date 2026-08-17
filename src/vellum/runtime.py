@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -120,6 +121,10 @@ class FasterWhisperTranscriptionEngine:
         )
         return "".join(segment.text for segment in segments)
 
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply Settings-managed Vocabulary hints to future Dictation sessions."""
+        self._hotwords = ", ".join(vocabulary_hints)
+
 
 class AsyncFasterWhisperTranscriptionEngine:
     """Warms the resident Transcription engine without delaying the tray startup."""
@@ -136,6 +141,7 @@ class AsyncFasterWhisperTranscriptionEngine:
         self._on_ready = on_ready
         self._model_directory = model_directory
         self._vocabulary_hints = tuple(vocabulary_hints)
+        self._vocabulary_hints_lock = Lock()
         self._warming_started = False
 
     def start_warming(self) -> None:
@@ -161,11 +167,23 @@ class AsyncFasterWhisperTranscriptionEngine:
             raise RuntimeError("The local Transcription engine did not finish warming.")
         return self._engine.transcribe(audio)
 
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply Settings changes without reloading the resident local model."""
+        with self._vocabulary_hints_lock:
+            self._vocabulary_hints = tuple(vocabulary_hints)
+            if self._engine is not None:
+                self._engine.set_vocabulary_hints(self._vocabulary_hints)
+
     def _warm(self, model_directory: Path) -> None:
         try:
-            self._engine = FasterWhisperTranscriptionEngine(
-                model_directory, vocabulary_hints=self._vocabulary_hints
+            with self._vocabulary_hints_lock:
+                vocabulary_hints = self._vocabulary_hints
+            engine = FasterWhisperTranscriptionEngine(
+                model_directory, vocabulary_hints=vocabulary_hints
             )
+            with self._vocabulary_hints_lock:
+                self._engine = engine
+                engine.set_vocabulary_hints(self._vocabulary_hints)
         except Exception as error:
             self._error = error
             self._on_ready(error)
@@ -180,14 +198,14 @@ class InputDeviceUnavailableError(RuntimeError):
 
 
 def list_input_devices() -> tuple[InputDevice, ...]:
-    """Return the currently available microphone descriptions for Settings."""
+    """Return Input devices that Settings can persist and resolve unambiguously."""
     try:
         import sounddevice as sd
     except ImportError as error:
         raise RuntimeError("The sounddevice microphone runtime is not installed.") from error
 
     try:
-        return tuple(
+        devices = tuple(
             InputDevice(
                 name=str(_device_field(device, "name")),
                 host_api=_host_api_name(sd, _device_field(device, "hostapi")),
@@ -197,6 +215,9 @@ def list_input_devices() -> tuple[InputDevice, ...]:
         )
     except sd.PortAudioError as error:
         raise RuntimeError("Vellum could not list the available Input devices.") from error
+
+    device_counts = Counter(devices)
+    return tuple(device for device in devices if device_counts[device] == 1)
 
 
 def _resolve_input_device(sounddevice: Any, selected_device: InputDevice) -> int:

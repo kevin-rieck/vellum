@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -36,8 +37,9 @@ class FakeIcon:
         self.notifications: list[tuple[str, str]] = []
         self.stopped = False
 
-    def run(self) -> None:
-        pass
+    def run(self, setup: Callable[[FakeIcon], None] | None = None) -> None:
+        if setup is not None:
+            setup(self)
 
     def stop(self) -> None:
         self.stopped = True
@@ -97,6 +99,8 @@ def test_tray_exposes_settings_and_communicates_session_feedback(
     tray_application.feedback(SessionFeedback.CANCELLED)
     tray_application.report_error(RuntimeError("microphone unavailable"))
 
+    assert icon.notifications == []
+    assert tray_application.run() is True
     assert tray_application._sounds.events == ["start", "end"]
     assert icon.title == "Vellum — error"
     assert icon.notifications == [

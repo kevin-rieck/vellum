@@ -10,6 +10,7 @@ from vellum.runtime import (
     FasterWhisperTranscriptionEngine,
     InputDeviceUnavailableError,
     SoundDeviceRecorder,
+    list_input_devices,
 )
 
 
@@ -45,6 +46,15 @@ class CapturingInputStream:
 
     def close(self) -> None:
         pass
+
+
+def test_transcription_engine_uses_updated_vocabulary_hints_for_future_sessions() -> None:
+    engine = FasterWhisperTranscriptionEngine.__new__(FasterWhisperTranscriptionEngine)
+    engine._hotwords = "Vellum, CTranslate2"
+
+    engine.set_vocabulary_hints(("Kubernetes", "Terraform"))
+
+    assert engine._hotwords == "Kubernetes, Terraform"
 
 
 def test_recorder_output_can_be_transcribed_by_vad_filter(
@@ -144,6 +154,26 @@ def test_selected_input_device_is_resolved_and_explicitly_opened(
 
     assert CapturingInputStream.instance is not None
     assert CapturingInputStream.instance.options["device"] == 1
+
+
+def test_indistinguishable_input_devices_are_not_offered_in_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(
+            PortAudioError=Exception,
+            query_devices=lambda: [
+                {"name": "USB microphone", "hostapi": 0, "max_input_channels": 1},
+                {"name": "USB microphone", "hostapi": 0, "max_input_channels": 1},
+                {"name": "Headset microphone", "hostapi": 1, "max_input_channels": 1},
+            ],
+            query_hostapis=lambda index: {"name": ("MME", "Windows WASAPI")[index]},
+        ),
+    )
+
+    assert list_input_devices() == (InputDevice("Headset microphone", "Windows WASAPI"),)
 
 
 def test_unavailable_selected_input_device_never_opens_the_default(
