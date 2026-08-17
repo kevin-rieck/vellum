@@ -1,19 +1,21 @@
-"""System-tray feedback for the developer-run Vellum application."""
+"""System-tray feedback and Settings entry point for the Vellum application."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from vellum.config import Settings
 from vellum.diagnostics import log_error
 from vellum.hotkey import PushToTalkHotkey
 from vellum.session import SessionFeedback
+from vellum.settings import SettingsController, SettingsWindow
 from vellum.sounds import WindowsSessionSounds
 
 
 class TrayApplication:
-    """Owns the visible session state and the application's Quit command."""
+    """Owns visible Session feedback, Settings, and the Quit command."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         try:
             import pystray
             from PIL import Image, ImageDraw
@@ -22,7 +24,9 @@ class TrayApplication:
 
         self._pystray = pystray
         self._hotkey: PushToTalkHotkey | None = None
-        self._sounds = WindowsSessionSounds()
+        self._settings = settings or Settings()
+        self._settings_controller: SettingsController | None = None
+        self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
         self._images = {
             SessionFeedback.IDLE: self._image(Image, ImageDraw, "#3b82f6"),
@@ -35,9 +39,22 @@ class TrayApplication:
         self._icon: Any = pystray.Icon(
             "vellum",
             self._images[SessionFeedback.IDLE],
-            "Vellum — ready (Ctrl+Alt+Space)",
-            pystray.Menu(pystray.MenuItem("Quit", self._quit)),
+            self._ready_title(),
+            pystray.Menu(
+                pystray.MenuItem("Settings", self._open_settings),
+                pystray.MenuItem("Quit", self._quit),
+            ),
         )
+
+    def set_settings_controller(self, settings_controller: SettingsController) -> None:
+        self._settings_controller = settings_controller
+
+    def apply_settings(self, settings: Settings) -> None:
+        """Reflect a saved preference set in the tray without retaining session data."""
+        self._settings = settings
+        self._sounds.set_enabled(settings.sounds_enabled)
+        if self._icon.icon == self._images[SessionFeedback.IDLE]:
+            self._icon.title = self._ready_title()
 
     def run(self, hotkey: PushToTalkHotkey) -> bool:
         self._hotkey = hotkey
@@ -64,7 +81,11 @@ class TrayApplication:
         elif feedback is SessionFeedback.TRANSCRIBING:
             self._sounds.play_end()
         self._icon.icon = self._images[feedback]
-        self._icon.title = f"Vellum — {feedback.value}"
+        self._icon.title = (
+            self._ready_title()
+            if feedback is SessionFeedback.IDLE
+            else f"Vellum — {feedback.value}"
+        )
         if feedback is SessionFeedback.CANCELLED:
             self._icon.notify(
                 "The insertion target changed. The Transcript is available in the clipboard.",
@@ -81,11 +102,24 @@ class TrayApplication:
         self.feedback(SessionFeedback.ERROR)
         self._icon.notify(str(error), "Vellum error")
 
+    def _open_settings(self, icon: Any, item: Any) -> None:
+        del icon, item
+        if self._settings_controller is None:
+            self.report_error(RuntimeError("Vellum Settings are not available yet."))
+            return
+        try:
+            SettingsWindow(self._settings, self._settings_controller.save).show()
+        except Exception as error:
+            self.report_error(error)
+
     def _quit(self, icon: Any, item: Any) -> None:
         del item
         if self._hotkey is not None:
             self._hotkey.stop()
         icon.stop()
+
+    def _ready_title(self) -> str:
+        return f"Vellum — ready ({self._settings.activation_hotkey})"
 
     @staticmethod
     def _image(image: Any, image_draw: Any, colour: str) -> Any:

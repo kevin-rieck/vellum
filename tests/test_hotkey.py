@@ -57,6 +57,17 @@ class DeferredThread:
         pass
 
 
+def make_session(recorder: FakeRecorder) -> DictationSession:
+    return DictationSession(
+        recorder=recorder,
+        transcription_engine=SuccessfulFakeEngine(),
+        focus=FakeFocus(),
+        clipboard=FakeClipboard(),
+        inserter=FakeInserter(),
+        feedback=lambda _: None,
+    )
+
+
 def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,14 +116,6 @@ def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on
     )
     timers: list[DeferredTimer] = []
     recorder = FakeRecorder()
-    session = DictationSession(
-        recorder=recorder,
-        transcription_engine=SuccessfulFakeEngine(),
-        focus=FakeFocus(),
-        clipboard=FakeClipboard(),
-        inserter=FakeInserter(),
-        feedback=lambda _: None,
-    )
     monkeypatch.setitem(
         sys.modules,
         "pynput",
@@ -120,7 +123,7 @@ def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on
     )
     monkeypatch.setattr(hotkey, "Timer", DeferredTimer)
     monkeypatch.setattr(hotkey, "Thread", DeferredThread)
-    activation = PushToTalkHotkey(session, lambda _: None)
+    activation = PushToTalkHotkey(make_session(recorder), lambda _: None)
     activation.enable()
     activation.start()
 
@@ -153,3 +156,82 @@ def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on
     assert next_timer.cancelled is True
     next_timer.function()
     assert recorder.stops == 1
+
+
+def test_configured_activation_hotkey_starts_and_ends_push_to_talk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    DeferredThread.started = []
+
+    class DeferredTimer:
+        def __init__(self, interval: float, function: Callable[[], None]) -> None:
+            self.function = function
+
+        def start(self) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+    class Listener:
+        instance: ClassVar[Listener | None] = None
+
+        def __init__(
+            self,
+            *,
+            on_press: Callable[[object], None],
+            on_release: Callable[[object], None],
+        ) -> None:
+            self.on_press = on_press
+            self.on_release = on_release
+            type(self).instance = self
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    key = SimpleNamespace(
+        ctrl=object(),
+        ctrl_l=object(),
+        ctrl_r=object(),
+        shift=object(),
+        shift_l=object(),
+        shift_r=object(),
+    )
+
+    class CharacterKey:
+        def __init__(self, char: str) -> None:
+            self.char = char
+
+    recorder = FakeRecorder()
+    monkeypatch.setitem(
+        sys.modules,
+        "pynput",
+        SimpleNamespace(keyboard=SimpleNamespace(Key=key, Listener=Listener)),
+    )
+    monkeypatch.setattr(hotkey, "Timer", DeferredTimer)
+    monkeypatch.setattr(hotkey, "Thread", DeferredThread)
+    activation = PushToTalkHotkey(make_session(recorder), lambda _: None, "Ctrl+Shift+D")
+    activation.enable()
+    activation.start()
+
+    assert Listener.instance is not None
+    Listener.instance.on_press(key.ctrl)
+    Listener.instance.on_press(key.shift)
+    Listener.instance.on_press(CharacterKey("d"))
+
+    assert recorder.starts == 1
+    assert activation.activation_hotkey == "Ctrl+Shift+D"
+
+    Listener.instance.on_release(CharacterKey("d"))
+
+    assert recorder.stops == 1
+    assert len(DeferredThread.started) == 1
+
+
+def test_shifted_digit_activation_hotkey_matches_its_virtual_key() -> None:
+    keyboard = SimpleNamespace(Key=SimpleNamespace())
+
+    assert hotkey._matches_activation_key(keyboard, SimpleNamespace(char="!", vk=49), "1")

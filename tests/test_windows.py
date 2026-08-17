@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
-from vellum.windows import WindowsFocus, WindowsPaste
+from vellum.windows import (
+    WindowsFocus,
+    WindowsPaste,
+    WindowsStartAtSignIn,
+    build_start_at_sign_in_command,
+)
 
 
 def test_paste_skips_a_target_that_is_no_longer_foreground(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,3 +91,65 @@ def test_paste_injects_keys_for_a_verified_same_privilege_target(
         (WindowsPaste._VK_V, 0, WindowsPaste._KEYEVENTF_KEYUP, 0),
         (WindowsPaste._VK_CONTROL, 0, WindowsPaste._KEYEVENTF_KEYUP, 0),
     ]
+
+
+def test_start_at_sign_in_uses_the_current_user_run_key_and_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: dict[str, str] = {}
+
+    class RegistryKey:
+        def __enter__(self) -> RegistryKey:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            pass
+
+    def create_key(root: object, path: str) -> RegistryKey:
+        assert root is registry.HKEY_CURRENT_USER
+        assert path == WindowsStartAtSignIn._RUN_KEY
+        return RegistryKey()
+
+    def open_key(root: object, path: str, reserved: int, access: int) -> RegistryKey:
+        assert root is registry.HKEY_CURRENT_USER
+        assert path == WindowsStartAtSignIn._RUN_KEY
+        assert reserved == 0
+        assert access == registry.KEY_SET_VALUE
+        return RegistryKey()
+
+    def set_value(key: object, name: str, reserved: int, kind: int, value: str) -> None:
+        assert isinstance(key, RegistryKey)
+        assert reserved == 0
+        assert kind == registry.REG_SZ
+        values[name] = value
+
+    def delete_value(key: object, name: str) -> None:
+        assert isinstance(key, RegistryKey)
+        if name not in values:
+            raise FileNotFoundError
+        del values[name]
+
+    registry = SimpleNamespace(
+        HKEY_CURRENT_USER=object(),
+        KEY_SET_VALUE=2,
+        REG_SZ=1,
+        CreateKey=create_key,
+        OpenKey=open_key,
+        SetValueEx=set_value,
+        DeleteValue=delete_value,
+    )
+    monkeypatch.setattr("vellum.windows.sys.platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", registry)
+    start_at_sign_in = WindowsStartAtSignIn(command='"C:\\Program Files\\Vellum\\vellum.exe"')
+
+    start_at_sign_in.set_enabled(True)
+    start_at_sign_in.set_enabled(False)
+    start_at_sign_in.set_enabled(False)
+
+    assert values == {}
+
+
+def test_start_at_sign_in_command_quotes_the_executable() -> None:
+    assert build_start_at_sign_in_command(r"C:\Program Files\Vellum\python.exe") == (
+        '"C:\\Program Files\\Vellum\\python.exe" -m vellum.app'
+    )

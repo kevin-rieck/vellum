@@ -3,10 +3,51 @@
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import sys
 from ctypes import wintypes
 
 from vellum.session import InsertionTarget
+
+
+def build_start_at_sign_in_command(executable: str | None = None) -> str:
+    """Build a correctly quoted user-level command to launch Vellum at sign-in."""
+    return subprocess.list2cmdline([executable or sys.executable, "-m", "vellum.app"])
+
+
+class WindowsStartAtSignIn:
+    """Owns Vellum's HKCU Run registration; it never requests elevation."""
+
+    _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    _VALUE_NAME = "Vellum"
+
+    def __init__(self, command: str | None = None) -> None:
+        self._command = command or build_start_at_sign_in_command()
+
+    def set_enabled(self, enabled: bool) -> None:
+        WindowsFocus._require_windows()
+        try:
+            import winreg
+        except ImportError as error:
+            raise RuntimeError("The Windows start-at-sign-in runtime is unavailable.") from error
+
+        try:
+            if enabled:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, self._RUN_KEY) as key:
+                    winreg.SetValueEx(key, self._VALUE_NAME, 0, winreg.REG_SZ, self._command)
+            else:
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER, self._RUN_KEY, 0, winreg.KEY_SET_VALUE
+                    ) as key:
+                        winreg.DeleteValue(key, self._VALUE_NAME)
+                except FileNotFoundError:
+                    # There is nothing to remove when Vellum has never been enabled.
+                    return
+        except OSError as error:
+            raise RuntimeError(
+                "Vellum could not update its start-at-sign-in preference."
+            ) from error
 
 
 class WindowsFocus:

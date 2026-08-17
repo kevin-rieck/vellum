@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
+from vellum.config import InputDevice
 from vellum.session import MAXIMUM_DICTATION_SECONDS, Audio
 from vellum.startup import StartupPrerequisiteError
 
@@ -174,20 +175,98 @@ class AsyncFasterWhisperTranscriptionEngine:
             self._ready.set()
 
 
+class InputDeviceUnavailableError(RuntimeError):
+    """A user-selected Input device cannot be opened without changing microphones."""
+
+
+def list_input_devices() -> tuple[InputDevice, ...]:
+    """Return the currently available microphone descriptions for Settings."""
+    try:
+        import sounddevice as sd
+    except ImportError as error:
+        raise RuntimeError("The sounddevice microphone runtime is not installed.") from error
+
+    try:
+        return tuple(
+            InputDevice(
+                name=str(_device_field(device, "name")),
+                host_api=_host_api_name(sd, _device_field(device, "hostapi")),
+            )
+            for device in sd.query_devices()
+            if _input_channels(device) > 0
+        )
+    except sd.PortAudioError as error:
+        raise RuntimeError("Vellum could not list the available Input devices.") from error
+
+
+def _resolve_input_device(sounddevice: Any, selected_device: InputDevice) -> int:
+    """Resolve a stable descriptor, refusing zero or ambiguous matches."""
+    try:
+        matches = [
+            index
+            for index, device in enumerate(sounddevice.query_devices())
+            if _input_channels(device) > 0
+            and str(_device_field(device, "name")) == selected_device.name
+            and _host_api_name(sounddevice, _device_field(device, "hostapi"))
+            == selected_device.host_api
+        ]
+    except sounddevice.PortAudioError as error:
+        raise InputDeviceUnavailableError(
+            f"The selected Input device {selected_device.display_name!r} is unavailable. "
+            "Vellum will not switch to a different microphone; choose another Input device "
+            "in Settings."
+        ) from error
+
+    if len(matches) != 1:
+        raise InputDeviceUnavailableError(
+            f"The selected Input device {selected_device.display_name!r} is unavailable or "
+            "ambiguous. Vellum will not switch to a different microphone; choose another Input "
+            "device in Settings."
+        )
+    return matches[0]
+
+
+def _device_field(device: object, field: str) -> object:
+    if isinstance(device, dict):
+        return device[field]
+    return getattr(device, field)
+
+
+def _input_channels(device: object) -> int:
+    channels = _device_field(device, "max_input_channels")
+    if not isinstance(channels, int):
+        raise RuntimeError("Vellum could not read an available Input device.")
+    return channels
+
+
+def _host_api_name(sounddevice: Any, host_api: object) -> str:
+    details = sounddevice.query_hostapis(host_api)
+    return str(_device_field(details, "name"))
+
+
 class SoundDeviceRecorder:
     """Captures one in-memory microphone stream, limited to 60 seconds."""
 
     def __init__(
         self,
         *,
+        input_device: InputDevice | None = None,
         sample_rate: int = 16_000,
         maximum_seconds: int = MAXIMUM_DICTATION_SECONDS,
     ) -> None:
+        self._input_device = input_device
         self._sample_rate = sample_rate
         self._maximum_frames = sample_rate * maximum_seconds
         self._chunks: list[np.ndarray[Any, Any]] = []
         self._lock = Lock()
         self._stream: Any | None = None
+
+    def set_input_device(self, input_device: InputDevice | None) -> None:
+        """Apply a Settings change once no Dictation session is capturing audio."""
+        with self._lock:
+            if self._stream is not None:
+                raise RuntimeError("Release Push-to-talk before changing the Input device.")
+            self._input_device = input_device
 
     def start(self) -> None:
         try:
@@ -197,6 +276,7 @@ class SoundDeviceRecorder:
 
         with self._lock:
             self._chunks = []
+            selected_input_device = self._input_device
 
         def capture(
             indata: np.ndarray[Any, Any], frames: int, time: object, status: object
@@ -211,15 +291,24 @@ class SoundDeviceRecorder:
                     self._chunks.append(indata[:remaining_frames].copy())
 
         try:
-            self._stream = sd.InputStream(
-                samplerate=self._sample_rate,
-                channels=1,
-                dtype="float32",
-                callback=capture,
-            )
+            stream_options: dict[str, object] = {
+                "samplerate": self._sample_rate,
+                "channels": 1,
+                "dtype": "float32",
+                "callback": capture,
+            }
+            if selected_input_device is not None:
+                stream_options["device"] = _resolve_input_device(sd, selected_input_device)
+            self._stream = sd.InputStream(**stream_options)
             self._stream.start()
         except sd.PortAudioError as error:
             self._stream = None
+            if selected_input_device is not None:
+                raise InputDeviceUnavailableError(
+                    f"The selected Input device {selected_input_device.display_name!r} "
+                    "is unavailable. Vellum will not switch to a different microphone; "
+                    "choose another Input device in Settings."
+                ) from error
             raise RuntimeError(
                 "Vellum could not access the microphone. In Windows Settings > Privacy & "
                 "security > Microphone, turn on Microphone access and Let desktop apps "
