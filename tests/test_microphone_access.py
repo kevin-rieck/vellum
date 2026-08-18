@@ -48,15 +48,6 @@ class CapturingInputStream:
         pass
 
 
-def test_transcription_engine_uses_updated_vocabulary_hints_for_future_sessions() -> None:
-    engine = FasterWhisperTranscriptionEngine.__new__(FasterWhisperTranscriptionEngine)
-    engine._hotwords = "Vellum, CTranslate2"
-
-    engine.set_vocabulary_hints(("Kubernetes", "Terraform"))
-
-    assert engine._hotwords == "Kubernetes, Terraform"
-
-
 def test_recorder_output_can_be_transcribed_by_vad_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -26,21 +26,21 @@ uv run vellum
 ```
 
 Set `VELLUM_MODEL_DIR` to use another local `large-v3-turbo` model directory
-(the directory name must remain `large-v3-turbo`). On startup Vellum checks CUDA
-availability and the selected local model files, and reports every missing or
-unloadable prerequisite before it enables Push-to-talk.
+(the directory name must remain `large-v3-turbo`). Set `VELLUM_VOCABULARY_HINTS`
+to a comma-separated list of local Vocabulary hints for names or domain terms
+(for example, `Vellum, CTranslate2`). Vellum always includes its own name as a
+Vocabulary hint. On startup Vellum checks CUDA availability and the local model
+files, and reports every missing or unloadable prerequisite before it enables
+Push-to-talk.
 
 To verify the tracer bullet, focus Notepad, hold Ctrl+Alt+Space while speaking
 English, then release it. The raw Transcript should appear in Notepad and
 remain available through Ctrl+V. The tray's **Settings** command can select an
-Input device, change the Activation hotkey, choose the installed V1
-Transcription engine model, edit Vocabulary hints, toggle sounds, and opt in to
+Input device, change the Activation hotkey, toggle sounds, and opt in to
 start-at-sign-in; these choices are stored in `%LOCALAPPDATA%\Vellum\settings.json`.
-Vocabulary hints start with common engineering terms and are passed directly to
-the local Transcription engine. Vellum keeps using the Windows default Input
-device until one is selected, and reports an unavailable selected device instead
-of switching microphones. If
-focus moves while transcription runs,
+Vellum keeps using the Windows default Input device until one is selected, and
+reports an unavailable selected device instead of switching microphones. If
+focus moves while the Transcription engine processes the Dictation session,
 Vellum does not paste and instead notifies you that the Transcript remains in
 the clipboard. Errors are also written to the launching console and to
 `%LOCALAPPDATA%\Vellum\vellum.log`, including a traceback for failures after

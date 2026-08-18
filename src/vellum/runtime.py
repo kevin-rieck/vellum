@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
-from vellum.config import InputDevice
+from vellum.config import InputDevice, unambiguous_input_devices
 from vellum.session import MAXIMUM_DICTATION_SECONDS, Audio
 from vellum.startup import StartupPrerequisiteError
 
@@ -121,10 +120,6 @@ class FasterWhisperTranscriptionEngine:
         )
         return "".join(segment.text for segment in segments)
 
-    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
-        """Apply Settings-managed Vocabulary hints to future Dictation sessions."""
-        self._hotwords = ", ".join(vocabulary_hints)
-
 
 class AsyncFasterWhisperTranscriptionEngine:
     """Warms the resident Transcription engine without delaying the tray startup."""
@@ -141,7 +136,6 @@ class AsyncFasterWhisperTranscriptionEngine:
         self._on_ready = on_ready
         self._model_directory = model_directory
         self._vocabulary_hints = tuple(vocabulary_hints)
-        self._vocabulary_hints_lock = Lock()
         self._warming_started = False
 
     def start_warming(self) -> None:
@@ -167,23 +161,11 @@ class AsyncFasterWhisperTranscriptionEngine:
             raise RuntimeError("The local Transcription engine did not finish warming.")
         return self._engine.transcribe(audio)
 
-    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
-        """Apply Settings changes without reloading the resident local model."""
-        with self._vocabulary_hints_lock:
-            self._vocabulary_hints = tuple(vocabulary_hints)
-            if self._engine is not None:
-                self._engine.set_vocabulary_hints(self._vocabulary_hints)
-
     def _warm(self, model_directory: Path) -> None:
         try:
-            with self._vocabulary_hints_lock:
-                vocabulary_hints = self._vocabulary_hints
-            engine = FasterWhisperTranscriptionEngine(
-                model_directory, vocabulary_hints=vocabulary_hints
+            self._engine = FasterWhisperTranscriptionEngine(
+                model_directory, vocabulary_hints=self._vocabulary_hints
             )
-            with self._vocabulary_hints_lock:
-                self._engine = engine
-                engine.set_vocabulary_hints(self._vocabulary_hints)
         except Exception as error:
             self._error = error
             self._on_ready(error)
@@ -195,6 +177,14 @@ class AsyncFasterWhisperTranscriptionEngine:
 
 class InputDeviceUnavailableError(RuntimeError):
     """A user-selected Input device cannot be opened without changing microphones."""
+
+    def __init__(self, input_device: InputDevice, *, ambiguous: bool = False) -> None:
+        availability = "is unavailable or ambiguous" if ambiguous else "is unavailable"
+        super().__init__(
+            f"The selected Input device {input_device.display_name!r} {availability}. "
+            "Vellum will not switch to a different microphone; choose another Input device "
+            "in Settings."
+        )
 
 
 def list_input_devices() -> tuple[InputDevice, ...]:
@@ -216,8 +206,7 @@ def list_input_devices() -> tuple[InputDevice, ...]:
     except sd.PortAudioError as error:
         raise RuntimeError("Vellum could not list the available Input devices.") from error
 
-    device_counts = Counter(devices)
-    return tuple(device for device in devices if device_counts[device] == 1)
+    return unambiguous_input_devices(devices)
 
 
 def _resolve_input_device(sounddevice: Any, selected_device: InputDevice) -> int:
@@ -232,18 +221,10 @@ def _resolve_input_device(sounddevice: Any, selected_device: InputDevice) -> int
             == selected_device.host_api
         ]
     except sounddevice.PortAudioError as error:
-        raise InputDeviceUnavailableError(
-            f"The selected Input device {selected_device.display_name!r} is unavailable. "
-            "Vellum will not switch to a different microphone; choose another Input device "
-            "in Settings."
-        ) from error
+        raise InputDeviceUnavailableError(selected_device) from error
 
     if len(matches) != 1:
-        raise InputDeviceUnavailableError(
-            f"The selected Input device {selected_device.display_name!r} is unavailable or "
-            "ambiguous. Vellum will not switch to a different microphone; choose another Input "
-            "device in Settings."
-        )
+        raise InputDeviceUnavailableError(selected_device, ambiguous=True)
     return matches[0]
 
 
@@ -325,11 +306,7 @@ class SoundDeviceRecorder:
         except sd.PortAudioError as error:
             self._stream = None
             if selected_input_device is not None:
-                raise InputDeviceUnavailableError(
-                    f"The selected Input device {selected_input_device.display_name!r} "
-                    "is unavailable. Vellum will not switch to a different microphone; "
-                    "choose another Input device in Settings."
-                ) from error
+                raise InputDeviceUnavailableError(selected_input_device) from error
             raise RuntimeError(
                 "Vellum could not access the microphone. In Windows Settings > Privacy & "
                 "security > Microphone, turn on Microphone access and Let desktop apps "

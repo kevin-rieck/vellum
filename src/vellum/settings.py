@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
-from vellum.config import TRANSCRIPTION_MODELS, InputDevice, Settings, SettingsStore
+from vellum.config import InputDevice, Settings, SettingsStore, unambiguous_input_devices
 from vellum.runtime import list_input_devices
 
 
@@ -23,22 +22,37 @@ class SettingsController:
         start_at_sign_in: StartAtSignIn,
         on_settings_changed: Callable[[Settings], None],
         can_apply: Callable[[Settings], None] | None = None,
+        *,
+        current_settings: Settings | None = None,
     ) -> None:
         self._store = store
         self._start_at_sign_in = start_at_sign_in
         self._on_settings_changed = on_settings_changed
         self._can_apply = can_apply or _allow_settings_change
+        self._current_settings = current_settings if current_settings is not None else store.load()
 
     def sync_start_at_sign_in(self, settings: Settings) -> None:
         """Make an already-persisted preference effective at the next sign-in."""
         self._start_at_sign_in.set_enabled(settings.start_at_sign_in)
 
     def save(self, settings: Settings) -> None:
-        """Persist Settings before applying their external and runtime effects."""
+        """Apply Settings effects, persisting only a completed change."""
         self._can_apply(settings)
-        self._store.save(settings)
-        self._start_at_sign_in.set_enabled(settings.start_at_sign_in)
-        self._on_settings_changed(settings)
+        runtime_applied = False
+        start_at_sign_in_applied = False
+        try:
+            self._on_settings_changed(settings)
+            runtime_applied = True
+            self._start_at_sign_in.set_enabled(settings.start_at_sign_in)
+            start_at_sign_in_applied = True
+            self._store.save(settings)
+        except Exception:
+            if start_at_sign_in_applied:
+                self._start_at_sign_in.set_enabled(self._current_settings.start_at_sign_in)
+            if runtime_applied:
+                self._on_settings_changed(self._current_settings)
+            raise
+        self._current_settings = settings
 
 
 def _allow_settings_change(settings: Settings) -> None:
@@ -80,9 +94,6 @@ class SettingsWindow:
         selected_device = self._selection_for_current_device(choices)
         input_device = tk.StringVar(value=selected_device)
         activation_hotkey = tk.StringVar(value=self._settings.activation_hotkey)
-        transcription_model = tk.StringVar(value=self._settings.transcription_model)
-        vocabulary_hints = tk.Text(frame, width=48, height=6)
-        vocabulary_hints.insert("1.0", "\n".join(self._settings.vocabulary_hints))
         sounds_enabled = tk.BooleanVar(value=self._settings.sounds_enabled)
         start_at_sign_in = tk.BooleanVar(value=self._settings.start_at_sign_in)
         error_text = tk.StringVar(value=load_error or "")
@@ -104,28 +115,14 @@ class SettingsWindow:
         ttk.Label(frame, text="Example: Ctrl+Alt+Space").grid(
             row=2, column=1, sticky="w", pady=(0, 4)
         )
-        ttk.Label(frame, text="Transcription engine model").grid(
-            row=3, column=0, sticky="w", pady=4
-        )
-        ttk.Combobox(
-            frame,
-            state="readonly",
-            textvariable=transcription_model,
-            values=TRANSCRIPTION_MODELS,
-            width=24,
-        ).grid(row=3, column=1, sticky="w", pady=4)
-        ttk.Label(frame, text="Vocabulary hints (one per line)").grid(
-            row=4, column=0, sticky="nw", pady=4
-        )
-        vocabulary_hints.grid(row=4, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(frame, text="Play capture sounds", variable=sounds_enabled).grid(
-            row=5, column=1, sticky="w", pady=4
+            row=3, column=1, sticky="w", pady=4
         )
         ttk.Checkbutton(frame, text="Start Vellum when I sign in", variable=start_at_sign_in).grid(
-            row=6, column=1, sticky="w", pady=4
+            row=4, column=1, sticky="w", pady=4
         )
         ttk.Label(frame, textvariable=error_text, foreground="#b91c1c", wraplength=430).grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=(4, 8)
+            row=5, column=0, columnspan=2, sticky="w", pady=(4, 8)
         )
 
         def save() -> None:
@@ -137,10 +134,6 @@ class SettingsWindow:
                     Settings(
                         input_device=device,
                         activation_hotkey=activation_hotkey.get(),
-                        transcription_model=transcription_model.get(),
-                        vocabulary_hints=tuple(
-                            vocabulary_hints.get("1.0", "end-1c").splitlines()
-                        ),
                         sounds_enabled=sounds_enabled.get(),
                         start_at_sign_in=start_at_sign_in.get(),
                     )
@@ -151,7 +144,7 @@ class SettingsWindow:
             window.destroy()
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=8, column=0, columnspan=2, sticky="e")
+        buttons.grid(row=6, column=0, columnspan=2, sticky="e")
         ttk.Button(buttons, text="Cancel", command=window.destroy).grid(
             row=0, column=0, padx=(0, 6)
         )
@@ -166,10 +159,8 @@ class SettingsWindow:
 
     def _device_choices(self, devices: Sequence[InputDevice]) -> dict[str, InputDevice | None]:
         choices: dict[str, InputDevice | None] = {self._WINDOWS_DEFAULT: None}
-        device_counts = Counter(devices)
-        for device in devices:
-            if device_counts[device] == 1:
-                choices[device.display_name] = device
+        for device in unambiguous_input_devices(devices):
+            choices[device.display_name] = device
         return choices
 
     def _selection_for_current_device(self, choices: dict[str, InputDevice | None]) -> str:
