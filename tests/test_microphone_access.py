@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from vellum.runtime import FasterWhisperTranscriptionEngine, SoundDeviceRecorder
+from vellum.config import InputDevice
+from vellum.runtime import (
+    FasterWhisperTranscriptionEngine,
+    InputDeviceUnavailableError,
+    SoundDeviceRecorder,
+    list_input_devices,
+)
 
 
 class AccessDeniedError(Exception):
@@ -29,6 +35,7 @@ class CapturingInputStream:
         callback = kwargs["callback"]
         assert callable(callback)
         self.callback = callback
+        self.options = kwargs
         CapturingInputStream.instance = self
 
     def start(self) -> None:
@@ -113,6 +120,80 @@ def test_recorder_releases_audio_when_stream_shutdown_fails(
 
     assert recorder._stream is None
     assert recorder._chunks == []
+
+
+def test_selected_input_device_is_resolved_and_explicitly_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(
+            InputStream=CapturingInputStream,
+            PortAudioError=Exception,
+            query_devices=lambda: [
+                {"name": "Other microphone", "hostapi": 0, "max_input_channels": 1},
+                {"name": "USB microphone", "hostapi": 1, "max_input_channels": 1},
+            ],
+            query_hostapis=lambda index: {"name": ("MME", "Windows WASAPI")[index]},
+        ),
+    )
+
+    SoundDeviceRecorder(
+        input_device=InputDevice("USB microphone", "Windows WASAPI")
+    ).start()
+
+    assert CapturingInputStream.instance is not None
+    assert CapturingInputStream.instance.options["device"] == 1
+
+
+def test_indistinguishable_input_devices_are_not_offered_in_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(
+            PortAudioError=Exception,
+            query_devices=lambda: [
+                {"name": "USB microphone", "hostapi": 0, "max_input_channels": 1},
+                {"name": "USB microphone", "hostapi": 0, "max_input_channels": 1},
+                {"name": "Headset microphone", "hostapi": 1, "max_input_channels": 1},
+            ],
+            query_hostapis=lambda index: {"name": ("MME", "Windows WASAPI")[index]},
+        ),
+    )
+
+    assert list_input_devices() == (InputDevice("Headset microphone", "Windows WASAPI"),)
+
+
+def test_unavailable_selected_input_device_never_opens_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened = False
+
+    def input_stream(**_: object) -> object:
+        nonlocal opened
+        opened = True
+        return CapturingInputStream()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(
+            InputStream=input_stream,
+            PortAudioError=Exception,
+            query_devices=lambda: [
+                {"name": "Different microphone", "hostapi": 0, "max_input_channels": 1},
+            ],
+            query_hostapis=lambda _: {"name": "MME"},
+        ),
+    )
+
+    with pytest.raises(InputDeviceUnavailableError, match="will not switch"):
+        SoundDeviceRecorder(input_device=InputDevice("USB microphone", "Windows WASAPI")).start()
+
+    assert opened is False
 
 
 def test_recorder_explains_how_to_grant_windows_microphone_access(

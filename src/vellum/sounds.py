@@ -6,13 +6,21 @@ import sys
 
 
 class WindowsSessionSounds:
-    """Plays capture-start and capture-end sounds without persisting session data."""
+    """Plays optional capture-boundary sounds without persisting session data."""
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self._enabled = enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = enabled
 
     def play_start(self) -> None:
-        self._play(0x00000000)  # MB_OK
+        if self._enabled:
+            self._play(0x00000000)  # MB_OK
 
     def play_end(self) -> None:
-        self._play(0x00000040)  # MB_ICONASTERISK
+        if self._enabled:
+            self._play(0x00000040)  # MB_ICONASTERISK
 
     @staticmethod
     def _play(sound: int) -> None:

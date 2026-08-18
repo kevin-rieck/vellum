@@ -58,7 +58,7 @@ The user-level background application that owns the Activation hotkey and Dictat
 _Avoid_: Service, daemon
 
 **Settings**:
-The native configuration window for microphone selection, Activation hotkey, start-at-sign-in, sounds, and Transcription engine model selection. Its choices persist in a user-owned configuration file.
+The native configuration window for microphone selection, Activation hotkey, start-at-sign-in, and sounds. Its choices persist in a user-owned configuration file.
 _Avoid_: Config-only setup, preferences file
 
 **Input device**:
@@ -70,5 +70,5 @@ The retention policy under which Dictation session audio exists only in memory u
 _Avoid_: Recording history, transcript archive
 
 **Vocabulary hints**:
-A Settings-managed list of technical terms supplied to the Transcription engine to improve recognition. V1 seeds the list with common engineering terminology and does not apply post-transcription replacement rules.
+A local list of technical terms supplied to the Transcription engine to improve recognition. V1 includes Vellum and accepts additional terms through `VELLUM_VOCABULARY_HINTS`; it does not apply post-transcription replacement rules.
 _Avoid_: Autocorrect, replacement dictionary
