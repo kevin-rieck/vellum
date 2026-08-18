@@ -112,6 +112,21 @@ def test_tray_exposes_settings_and_communicates_session_feedback(
     ]
 
 
+def test_tray_keeps_settings_available_for_explicit_model_setup(
+    tray_application: tray.TrayApplication,
+) -> None:
+    tray_application.model_setup_required()
+
+    assert tray_application._icon.title == "Vellum — download a model in Settings"
+    assert tray_application.run() is True
+    assert tray_application._icon.notifications == [
+        (
+            "Open Settings to choose, download, and verify the local Transcription engine.",
+            "Vellum model setup",
+        )
+    ]
+
+
 def test_disabling_sounds_suppresses_capture_cues(tray_application: tray.TrayApplication) -> None:
     tray_application.apply_settings(Settings(sounds_enabled=False))
 

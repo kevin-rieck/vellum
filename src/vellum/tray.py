@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from threading import Lock
 from typing import Any
 
 from vellum.config import Settings
 from vellum.diagnostics import log_error
 from vellum.hotkey import PushToTalkHotkey
+from vellum.models import ModelDescriptor, ModelDownloadProgress
 from vellum.session import SessionFeedback
 from vellum.settings import SettingsController, SettingsWindow
 from vellum.sounds import WindowsSessionSounds
@@ -27,6 +29,12 @@ class TrayApplication:
         self._hotkey: PushToTalkHotkey | None = None
         self._settings = settings or Settings()
         self._settings_controller: SettingsController | None = None
+        self._models: tuple[ModelDescriptor, ...] = ()
+        self._model_available: Callable[[ModelDescriptor], bool] = lambda _: False
+        self._on_model_download: (
+            Callable[[Settings, Callable[[ModelDownloadProgress], None]], None] | None
+        ) = None
+        self._model_setup_required = False
         self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
         self._icon_registered = False
@@ -53,11 +61,40 @@ class TrayApplication:
     def set_settings_controller(self, settings_controller: SettingsController) -> None:
         self._settings_controller = settings_controller
 
+    def set_model_onboarding(
+        self,
+        models: Sequence[ModelDescriptor],
+        model_available: Callable[[ModelDescriptor], bool],
+        on_download: Callable[[Settings, Callable[[ModelDownloadProgress], None]], None],
+    ) -> None:
+        """Expose explicit model acquisition through the existing Settings command."""
+        self._models = tuple(models)
+        self._model_available = model_available
+        self._on_model_download = on_download
+
+    def activate_hotkey(self, hotkey: PushToTalkHotkey) -> None:
+        """Start a freshly warmed hotkey when onboarding finishes after tray startup."""
+        self._hotkey = hotkey
+        if self._icon_registered and not self._startup_failed:
+            try:
+                hotkey.start()
+            except Exception as error:
+                self.fail_startup(error)
+
+    def model_setup_required(self) -> None:
+        """Keep the tray interactive while first-run model acquisition is pending."""
+        self._model_setup_required = True
+        self._icon.title = "Vellum — download a model in Settings"
+        self._notify(
+            "Open Settings to choose, download, and verify the local Transcription engine.",
+            "Vellum model setup",
+        )
+
     def apply_settings(self, settings: Settings) -> None:
         """Reflect a saved preference set in the tray without retaining session data."""
         self._settings = settings
         self._sounds.set_enabled(settings.sounds_enabled)
-        if self._icon.icon == self._images[SessionFeedback.IDLE]:
+        if self._icon.icon == self._images[SessionFeedback.IDLE] and not self._model_setup_required:
             self._icon.title = self._ready_title()
 
     def run(self, hotkey: PushToTalkHotkey | None = None) -> bool:
@@ -72,6 +109,7 @@ class TrayApplication:
         return not self._startup_failed
 
     def warming(self) -> None:
+        self._model_setup_required = False
         self._icon.title = "Vellum — warming local Transcription engine"
 
     def fail_startup(self, error: Exception) -> None:
@@ -98,9 +136,7 @@ class TrayApplication:
                 "Vellum insertion cancelled",
             )
         elif feedback is SessionFeedback.NO_SPEECH:
-            self._notify(
-                "No usable speech was detected; the clipboard was not changed.", "Vellum"
-            )
+            self._notify("No usable speech was detected; the clipboard was not changed.", "Vellum")
 
     def report_error(self, error: Exception) -> None:
         """Show and persist failures raised during a Dictation session."""
@@ -131,7 +167,13 @@ class TrayApplication:
             self.report_error(RuntimeError("Vellum Settings are not available yet."))
             return
         try:
-            SettingsWindow(self._settings, self._settings_controller.save).show()
+            SettingsWindow(
+                self._settings,
+                self._settings_controller.save,
+                models=self._models,
+                model_available=self._model_available,
+                on_download=self._on_model_download,
+            ).show()
         except Exception as error:
             self.report_error(error)
 

@@ -81,9 +81,7 @@ def test_cuda_preflight_registers_the_cuda_bin_directory_before_loading_ctransla
 def test_cuda_preflight_registers_the_default_cuda_12_bin_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cuda_bin_directory = (
-        tmp_path / "NVIDIA GPU Computing Toolkit" / "CUDA" / "v12.9" / "bin"
-    )
+    cuda_bin_directory = tmp_path / "NVIDIA GPU Computing Toolkit" / "CUDA" / "v12.9" / "bin"
     cuda_bin_directory.mkdir(parents=True)
     (cuda_bin_directory / "cublas64_12.dll").touch()
     monkeypatch.delenv("CUDA_PATH", raising=False)
@@ -130,23 +128,24 @@ def test_engine_rejects_a_cuda_runtime_that_fails_on_lazy_inference(
     )
 
     with pytest.raises(StartupPrerequisiteError) as raised:
-        FasterWhisperTranscriptionEngine(
-            Path("large-v3-turbo"), vocabulary_hints=("Vellum",)
-        )
+        FasterWhisperTranscriptionEngine(Path("large-v3-turbo"), vocabulary_hints=("Vellum",))
 
     assert raised.value.__cause__ is inference_error
 
 
-def test_model_prerequisite_requires_all_files_needed_by_the_local_engine(tmp_path: Path) -> None:
+def test_model_prerequisite_requires_all_files_in_the_selected_model_manifest(
+    tmp_path: Path,
+) -> None:
     model_directory = tmp_path / "large-v3-turbo"
     model_directory.mkdir()
-    (model_directory / "model.bin").touch()
+    for file_name in ("model.bin", "config.json", "tokenizer.json"):
+        (model_directory / file_name).touch()
     probe = WindowsPrerequisiteProbe(model_directory)
 
     assert probe.model_available is False
 
-    (model_directory / "config.json").touch()
-    (model_directory / "tokenizer.json").touch()
+    for file_name in ("preprocessor_config.json", "vocabulary.json"):
+        (model_directory / file_name).touch()
 
     assert probe.model_available is True
 

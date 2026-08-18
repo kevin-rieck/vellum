@@ -6,7 +6,10 @@ from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from vellum.config import InputDevice, Settings, SettingsStore, unambiguous_input_devices
+from vellum.models import ModelDescriptor, ModelDownloadProgress, format_download_size
 from vellum.runtime import list_input_devices
+
+ModelDownload = Callable[[Settings, Callable[[ModelDownloadProgress], None]], None]
 
 
 class StartAtSignIn(Protocol):
@@ -70,10 +73,16 @@ class SettingsWindow:
         on_save: Callable[[Settings], None],
         *,
         input_devices: Callable[[], Sequence[InputDevice]] = list_input_devices,
+        models: Sequence[ModelDescriptor] = (),
+        model_available: Callable[[ModelDescriptor], bool] | None = None,
+        on_download: ModelDownload | None = None,
     ) -> None:
         self._settings = settings
         self._on_save = on_save
         self._input_devices = input_devices
+        self._models = tuple(models)
+        self._model_available = model_available or (lambda _: False)
+        self._on_download = on_download
 
     def show(self) -> None:
         """Open the Settings form and keep all choices in local process memory."""
@@ -90,61 +99,173 @@ class SettingsWindow:
         frame.grid(sticky="nsew")
 
         devices, load_error = self._available_devices()
-        choices = self._device_choices(devices)
-        selected_device = self._selection_for_current_device(choices)
+        device_choices = self._device_choices(devices)
+        selected_device = self._selection_for_current_device(device_choices)
         input_device = tk.StringVar(value=selected_device)
         activation_hotkey = tk.StringVar(value=self._settings.activation_hotkey)
         sounds_enabled = tk.BooleanVar(value=self._settings.sounds_enabled)
         start_at_sign_in = tk.BooleanVar(value=self._settings.start_at_sign_in)
+        vocabulary_hints = tk.Text(frame, width=48, height=4)
+        vocabulary_hints.insert("1.0", "\n".join(self._settings.vocabulary_hints))
         error_text = tk.StringVar(value=load_error or "")
 
-        ttk.Label(frame, text="Input device").grid(row=0, column=0, sticky="w", pady=(0, 4))
-        device_selector = ttk.Combobox(
-            frame,
-            state="readonly",
-            textvariable=input_device,
-            values=tuple(choices),
-            width=48,
+        model_choices = {model.display_name: model for model in self._models}
+        selected_model = next(
+            (
+                label
+                for label, model in model_choices.items()
+                if model.id == self._settings.model_id
+            ),
+            next(iter(model_choices), ""),
         )
-        device_selector.grid(row=0, column=1, sticky="ew", pady=(0, 4))
+        model_selection = tk.StringVar(value=selected_model)
+        model_information = tk.StringVar()
+        download_status = tk.StringVar()
 
-        ttk.Label(frame, text="Activation hotkey").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=activation_hotkey, width=24).grid(
-            row=1, column=1, sticky="w", pady=4
-        )
-        ttk.Label(frame, text="Example: Ctrl+Alt+Space").grid(
-            row=2, column=1, sticky="w", pady=(0, 4)
-        )
-        ttk.Checkbutton(frame, text="Play capture sounds", variable=sounds_enabled).grid(
-            row=3, column=1, sticky="w", pady=4
-        )
-        ttk.Checkbutton(frame, text="Start Vellum when I sign in", variable=start_at_sign_in).grid(
-            row=4, column=1, sticky="w", pady=4
-        )
-        ttk.Label(frame, textvariable=error_text, foreground="#b91c1c", wraplength=430).grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(4, 8)
-        )
+        def chosen_model() -> ModelDescriptor | None:
+            return model_choices.get(model_selection.get())
+
+        def refresh_model_information() -> None:
+            model = chosen_model()
+            if model is None:
+                return
+            installed = (
+                "Installed and verified locally"
+                if self._model_available(model)
+                else "Not downloaded"
+            )
+            download_size = format_download_size(model.download_size_bytes)
+            model_information.set(
+                f"Source: {model.source_url}\nDownload: {download_size}\nStatus: {installed}"
+            )
+
+        def form_settings() -> Settings:
+            device = device_choices.get(input_device.get())
+            if input_device.get() not in device_choices:
+                raise RuntimeError("Choose an Input device from the list.")
+            model = chosen_model()
+            if self._models and model is None:
+                raise RuntimeError("Choose a Transcription engine from the list.")
+            entered_hints = tuple(
+                hint
+                for line in vocabulary_hints.get("1.0", "end-1c").splitlines()
+                for hint in line.split(",")
+            )
+            return Settings(
+                input_device=device,
+                activation_hotkey=activation_hotkey.get(),
+                sounds_enabled=sounds_enabled.get(),
+                start_at_sign_in=start_at_sign_in.get(),
+                model_id=self._settings.model_id if model is None else model.id,
+                vocabulary_hints=entered_hints,
+            )
 
         def save() -> None:
             try:
-                device = choices.get(input_device.get())
-                if input_device.get() not in choices:
-                    raise RuntimeError("Choose an Input device from the list.")
-                self._on_save(
-                    Settings(
-                        input_device=device,
-                        activation_hotkey=activation_hotkey.get(),
-                        sounds_enabled=sounds_enabled.get(),
-                        start_at_sign_in=start_at_sign_in.get(),
-                    )
-                )
+                self._on_save(form_settings())
             except Exception as error:
                 error_text.set(str(error))
                 return
             window.destroy()
 
+        row = 0
+        if self._models:
+            ttk.Label(frame, text="Transcription engine").grid(
+                row=row, column=0, sticky="w", pady=(0, 4)
+            )
+            model_selector = ttk.Combobox(
+                frame,
+                state="readonly",
+                textvariable=model_selection,
+                values=tuple(model_choices),
+                width=48,
+            )
+            model_selector.grid(row=row, column=1, sticky="ew", pady=(0, 4))
+            model_selector.bind("<<ComboboxSelected>>", lambda _: refresh_model_information())
+            row += 1
+            ttk.Label(frame, textvariable=model_information, wraplength=430).grid(
+                row=row, column=1, sticky="w", pady=(0, 4)
+            )
+            refresh_model_information()
+            row += 1
+
+            def update_download_progress(progress: ModelDownloadProgress) -> None:
+                download_status.set(
+                    f"{progress.current_file}: {progress.percentage}% "
+                    f"({format_download_size(progress.downloaded_bytes)} of "
+                    f"{format_download_size(progress.total_bytes)})"
+                )
+                window.update_idletasks()
+
+            def download() -> None:
+                if self._on_download is None:
+                    error_text.set("Model downloads are not available in this Vellum session.")
+                    return
+                try:
+                    updated_settings = form_settings()
+                    self._on_save(updated_settings)
+                    self._on_download(updated_settings, update_download_progress)
+                except Exception as error:
+                    error_text.set(str(error))
+                    return
+                download_status.set(
+                    "Verified download; Vellum is warming the local Transcription engine."
+                )
+                refresh_model_information()
+
+            ttk.Button(frame, text="Download and verify model", command=download).grid(
+                row=row, column=1, sticky="w", pady=(0, 2)
+            )
+            row += 1
+            ttk.Label(frame, textvariable=download_status, wraplength=430).grid(
+                row=row, column=1, sticky="w", pady=(0, 4)
+            )
+            row += 1
+
+        ttk.Label(frame, text="Input device").grid(row=row, column=0, sticky="w", pady=(0, 4))
+        device_selector = ttk.Combobox(
+            frame,
+            state="readonly",
+            textvariable=input_device,
+            values=tuple(device_choices),
+            width=48,
+        )
+        device_selector.grid(row=row, column=1, sticky="ew", pady=(0, 4))
+        row += 1
+
+        ttk.Label(frame, text="Activation hotkey").grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=activation_hotkey, width=24).grid(
+            row=row, column=1, sticky="w", pady=4
+        )
+        row += 1
+        ttk.Label(frame, text="Example: Ctrl+Alt+Space").grid(
+            row=row, column=1, sticky="w", pady=(0, 4)
+        )
+        row += 1
+        ttk.Checkbutton(frame, text="Play capture sounds", variable=sounds_enabled).grid(
+            row=row, column=1, sticky="w", pady=4
+        )
+        row += 1
+        ttk.Checkbutton(frame, text="Start Vellum when I sign in", variable=start_at_sign_in).grid(
+            row=row, column=1, sticky="w", pady=4
+        )
+        row += 1
+        ttk.Label(frame, text="Vocabulary hints").grid(row=row, column=0, sticky="nw", pady=4)
+        vocabulary_hints.grid(row=row, column=1, sticky="ew", pady=4)
+        row += 1
+        ttk.Label(
+            frame,
+            text="One term per line or comma-separated. Vellum is always included.",
+            wraplength=430,
+        ).grid(row=row, column=1, sticky="w", pady=(0, 4))
+        row += 1
+        ttk.Label(frame, textvariable=error_text, foreground="#b91c1c", wraplength=430).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 8)
+        )
+        row += 1
+
         buttons = ttk.Frame(frame)
-        buttons.grid(row=6, column=0, columnspan=2, sticky="e")
+        buttons.grid(row=row, column=0, columnspan=2, sticky="e")
         ttk.Button(buttons, text="Cancel", command=window.destroy).grid(
             row=0, column=0, padx=(0, 6)
         )

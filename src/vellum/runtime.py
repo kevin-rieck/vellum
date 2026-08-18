@@ -9,6 +9,7 @@ from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
 from vellum.config import InputDevice, unambiguous_input_devices
+from vellum.models import LARGE_V3_TURBO, ModelDescriptor
 from vellum.session import MAXIMUM_DICTATION_SECONDS, Audio
 from vellum.startup import StartupPrerequisiteError
 
@@ -33,9 +34,7 @@ def _register_cuda_dll_directories() -> None:
     toolkit_directory = program_files / "NVIDIA GPU Computing Toolkit" / "CUDA"
     candidates.extend(toolkit_directory.glob("v12.*/bin"))
 
-    candidates.extend(
-        Path(path) for path in os.environ.get("PATH", "").split(os.pathsep) if path
-    )
+    candidates.extend(Path(path) for path in os.environ.get("PATH", "").split(os.pathsep) if path)
     for directory in candidates:
         if (
             directory in _registered_cuda_dll_directories
@@ -49,8 +48,9 @@ def _register_cuda_dll_directories() -> None:
 class WindowsPrerequisiteProbe:
     """Checks runtime prerequisites without downloading models or contacting a service."""
 
-    def __init__(self, model_directory: Path) -> None:
+    def __init__(self, model_directory: Path, model: ModelDescriptor = LARGE_V3_TURBO) -> None:
         self._model_directory = model_directory
+        self._model = model
 
     @property
     def model_directory(self) -> Path:
@@ -58,11 +58,12 @@ class WindowsPrerequisiteProbe:
 
     @property
     def model_available(self) -> bool:
-        # The path name is an intentional v1 guard against silently using another model.
-        if self.model_directory.name != "large-v3-turbo":
+        # The directory name is an intentional guard against silently using another model.
+        if self.model_directory.name != self._model.directory_name:
             return False
-        required_files = ("model.bin", "config.json", "tokenizer.json")
-        return all((self.model_directory / file_name).is_file() for file_name in required_files)
+        return all(
+            (self.model_directory / model_file.name).is_file() for model_file in self._model.files
+        )
 
     @property
     def cuda_available(self) -> bool:
@@ -97,6 +98,10 @@ class FasterWhisperTranscriptionEngine:
                 "Vellum cannot start; the local large-v3-turbo model or CUDA inference "
                 f"runtime could not be loaded: {error}"
             ) from error
+
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply persisted Vocabulary hints without replacing the resident model."""
+        self._hotwords = ", ".join(vocabulary_hints)
 
     def _validate_cuda_inference(self) -> None:
         """Force one GPU inference while warming so lazy CUDA failures block startup."""
@@ -136,6 +141,7 @@ class AsyncFasterWhisperTranscriptionEngine:
         self._on_ready = on_ready
         self._model_directory = model_directory
         self._vocabulary_hints = tuple(vocabulary_hints)
+        self._engine_lock = Lock()
         self._warming_started = False
 
     def start_warming(self) -> None:
@@ -144,6 +150,13 @@ class AsyncFasterWhisperTranscriptionEngine:
             return
         self._warming_started = True
         Thread(target=self._warm, args=(self._model_directory,), daemon=True).start()
+
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply persisted hints to the resident engine once no session is active."""
+        with self._engine_lock:
+            self._vocabulary_hints = tuple(vocabulary_hints)
+            if self._engine is not None:
+                self._engine.set_vocabulary_hints(self._vocabulary_hints)
 
     def wait_until_ready(self) -> None:
         """Raise the warm-up error during startup, before the hotkey is enabled."""
@@ -163,9 +176,14 @@ class AsyncFasterWhisperTranscriptionEngine:
 
     def _warm(self, model_directory: Path) -> None:
         try:
-            self._engine = FasterWhisperTranscriptionEngine(
-                model_directory, vocabulary_hints=self._vocabulary_hints
+            with self._engine_lock:
+                vocabulary_hints = self._vocabulary_hints
+            engine = FasterWhisperTranscriptionEngine(
+                model_directory, vocabulary_hints=vocabulary_hints
             )
+            with self._engine_lock:
+                engine.set_vocabulary_hints(self._vocabulary_hints)
+                self._engine = engine
         except Exception as error:
             self._error = error
             self._on_ready(error)

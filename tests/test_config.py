@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vellum.config import InputDevice, Settings, SettingsError, SettingsStore, VellumPaths
+from vellum.config import InputDevice, Settings, SettingsError, SettingsStore
 
 
 def test_settings_round_trip_all_persisted_preferences(tmp_path: Path) -> None:
@@ -16,6 +16,7 @@ def test_settings_round_trip_all_persisted_preferences(tmp_path: Path) -> None:
         activation_hotkey="shift+control+d",
         sounds_enabled=False,
         start_at_sign_in=True,
+        vocabulary_hints=("CTranslate2", "Acme API"),
     )
 
     store.save(settings)
@@ -25,13 +26,16 @@ def test_settings_round_trip_all_persisted_preferences(tmp_path: Path) -> None:
         activation_hotkey="Ctrl+Shift+D",
         sounds_enabled=False,
         start_at_sign_in=True,
+        vocabulary_hints=("CTranslate2", "Acme API"),
     )
     assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "version": 1,
+        "version": 2,
         "input_device": {"name": "USB Microphone", "host_api": "Windows WASAPI"},
         "activation_hotkey": "Ctrl+Shift+D",
         "sounds_enabled": False,
         "start_at_sign_in": True,
+        "model_id": "large-v3-turbo",
+        "vocabulary_hints": ["CTranslate2", "Acme API"],
     }
     assert list(settings_file.parent.glob("*.tmp")) == []
 
@@ -40,12 +44,31 @@ def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     assert SettingsStore(tmp_path / "settings.json").load() == Settings()
 
 
-def test_vocabulary_hints_include_vellum_and_configured_domain_terms(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("VELLUM_VOCABULARY_HINTS", "CTranslate2,  Acme API  ,")
+def test_persisted_vocabulary_hints_include_vellum_once_for_the_transcription_engine() -> None:
+    settings = Settings(vocabulary_hints=("CTranslate2", "Vellum", "ctranslate2", "Acme API"))
 
-    assert VellumPaths.from_environment().vocabulary_hints == ("Vellum", "CTranslate2", "Acme API")
+    assert settings.vocabulary_hints == ("CTranslate2", "Vellum", "Acme API")
+    assert settings.transcription_vocabulary_hints == ("Vellum", "CTranslate2", "Acme API")
+
+
+def test_version_1_settings_migrate_to_the_default_model_and_no_vocabulary_hints(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "input_device": None,
+                "activation_hotkey": "Ctrl+Alt+Space",
+                "sounds_enabled": True,
+                "start_at_sign_in": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert SettingsStore(settings_file).load() == Settings()
 
 
 def test_corrupt_settings_are_reported_without_overwriting_the_file(tmp_path: Path) -> None:
