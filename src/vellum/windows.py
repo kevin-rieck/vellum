@@ -132,22 +132,40 @@ class WindowsPaste:
         return cls._token_is_elevated(kernel32.GetCurrentProcess())
 
     @staticmethod
-    def _token_is_elevated(process: int) -> bool:
+    def _token_is_elevated(process: wintypes.HANDLE) -> bool:
         class TokenElevation(ctypes.Structure):
             _fields_ = [("TokenIsElevated", wintypes.DWORD)]
 
         advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        open_process_token = advapi32.OpenProcessToken
+        open_process_token.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        open_process_token.restype = wintypes.BOOL
+        get_token_information = advapi32.GetTokenInformation
+        get_token_information.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        get_token_information.restype = wintypes.BOOL
+
         token = wintypes.HANDLE()
-        if not advapi32.OpenProcessToken(process, 0x0008, ctypes.byref(token)):
+        if not open_process_token(process, 0x0008, ctypes.byref(token)):
             raise PermissionError("Vellum could not verify process elevation.")
         try:
             elevation = TokenElevation()
-            if not advapi32.GetTokenInformation(
+            returned_length = wintypes.DWORD()
+            if not get_token_information(
                 token,
                 20,
                 ctypes.byref(elevation),
                 ctypes.sizeof(elevation),
-                None,
+                ctypes.byref(returned_length),
             ):
                 raise PermissionError("Vellum could not verify process elevation.")
             return bool(elevation.TokenIsElevated)
