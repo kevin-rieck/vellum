@@ -9,10 +9,10 @@ from typing import Any
 from vellum.config import Settings
 from vellum.diagnostics import log_error
 from vellum.hotkey import PushToTalkHotkey
-from vellum.models import ModelDescriptor, ModelDownloadProgress
 from vellum.session import SessionFeedback
 from vellum.settings import SettingsController, SettingsWindow
 from vellum.sounds import WindowsSessionSounds
+from vellum.transcription_engines import EngineDownloadProgress, TranscriptionEngineDescriptor
 
 
 class TrayApplication:
@@ -29,12 +29,12 @@ class TrayApplication:
         self._hotkey: PushToTalkHotkey | None = None
         self._settings = settings or Settings()
         self._settings_controller: SettingsController | None = None
-        self._models: tuple[ModelDescriptor, ...] = ()
-        self._model_available: Callable[[ModelDescriptor], bool] = lambda _: False
-        self._on_model_download: (
-            Callable[[Settings, Callable[[ModelDownloadProgress], None]], None] | None
+        self._engines: tuple[TranscriptionEngineDescriptor, ...] = ()
+        self._engine_available: Callable[[TranscriptionEngineDescriptor], bool] = lambda _: False
+        self._on_engine_download: (
+            Callable[[Settings, Callable[[EngineDownloadProgress], None]], None] | None
         ) = None
-        self._model_setup_required = False
+        self._engine_setup_required = False
         self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
         self._icon_registered = False
@@ -61,16 +61,16 @@ class TrayApplication:
     def set_settings_controller(self, settings_controller: SettingsController) -> None:
         self._settings_controller = settings_controller
 
-    def set_model_onboarding(
+    def set_engine_onboarding(
         self,
-        models: Sequence[ModelDescriptor],
-        model_available: Callable[[ModelDescriptor], bool],
-        on_download: Callable[[Settings, Callable[[ModelDownloadProgress], None]], None],
+        engines: Sequence[TranscriptionEngineDescriptor],
+        engine_available: Callable[[TranscriptionEngineDescriptor], bool],
+        on_download: Callable[[Settings, Callable[[EngineDownloadProgress], None]], None],
     ) -> None:
-        """Expose explicit model acquisition through the existing Settings command."""
-        self._models = tuple(models)
-        self._model_available = model_available
-        self._on_model_download = on_download
+        """Expose explicit engine acquisition through the existing Settings command."""
+        self._engines = tuple(engines)
+        self._engine_available = engine_available
+        self._on_engine_download = on_download
 
     def activate_hotkey(self, hotkey: PushToTalkHotkey) -> None:
         """Start a freshly warmed hotkey when onboarding finishes after tray startup."""
@@ -81,20 +81,23 @@ class TrayApplication:
             except Exception as error:
                 self.fail_startup(error)
 
-    def model_setup_required(self) -> None:
-        """Keep the tray interactive while first-run model acquisition is pending."""
-        self._model_setup_required = True
-        self._icon.title = "Vellum — download a model in Settings"
+    def engine_setup_required(self) -> None:
+        """Keep the tray interactive while first-run engine acquisition is pending."""
+        self._engine_setup_required = True
+        self._icon.title = "Vellum — download the Transcription engine in Settings"
         self._notify(
             "Open Settings to choose, download, and verify the local Transcription engine.",
-            "Vellum model setup",
+            "Vellum Transcription engine setup",
         )
 
     def apply_settings(self, settings: Settings) -> None:
         """Reflect a saved preference set in the tray without retaining session data."""
         self._settings = settings
         self._sounds.set_enabled(settings.sounds_enabled)
-        if self._icon.icon == self._images[SessionFeedback.IDLE] and not self._model_setup_required:
+        if (
+            self._icon.icon == self._images[SessionFeedback.IDLE]
+            and not self._engine_setup_required
+        ):
             self._icon.title = self._ready_title()
 
     def run(self, hotkey: PushToTalkHotkey | None = None) -> bool:
@@ -109,7 +112,7 @@ class TrayApplication:
         return not self._startup_failed
 
     def warming(self) -> None:
-        self._model_setup_required = False
+        self._engine_setup_required = False
         self._icon.title = "Vellum — warming local Transcription engine"
 
     def fail_startup(self, error: Exception) -> None:
@@ -170,9 +173,9 @@ class TrayApplication:
             SettingsWindow(
                 self._settings,
                 self._settings_controller.save,
-                models=self._models,
-                model_available=self._model_available,
-                on_download=self._on_model_download,
+                engines=self._engines,
+                engine_available=self._engine_available,
+                on_download=self._on_engine_download,
             ).show()
         except Exception as error:
             self.report_error(error)

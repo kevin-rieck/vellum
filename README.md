@@ -2,7 +2,7 @@
 
 Vellum is a Windows-first, local-only Push-to-talk dictation application. Hold
 **Ctrl+Alt+Space**, speak, and release it to transcribe with the local
-`large-v3-turbo` model. Vellum copies the resulting English Transcript to the
+`large-v3-turbo` Transcription engine. Vellum copies the resulting English Transcript to the
 system clipboard and sends Ctrl+V only if the foreground Insertion target is
 the same window that was focused when microphone capture ended.
 
@@ -22,22 +22,22 @@ uv run vellum
 ```
 
 On first launch, open the tray **Settings** window and explicitly choose
-**Download and verify model**. It identifies the pinned Hugging Face source
+**Download and verify Transcription engine**. It identifies the pinned Hugging Face source
 ([`deepdml/faster-whisper-large-v3-turbo-ct2`](https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2)),
-its 1.51 GiB download size, and byte progress. Vellum writes the model to a
-staging directory, verifies every downloaded file against its pinned SHA-256
-manifest, then atomically installs it at
-`%LOCALAPPDATA%\Vellum\models\large-v3-turbo`. A failed or corrupt download is
+its 1.51 GiB download size, and byte progress. Vellum writes the engine artifacts
+to a staging directory, verifies every downloaded file against its pinned SHA-256
+manifest, then atomically installs them at
+`%LOCALAPPDATA%\Vellum\engines\large-v3-turbo`. A failed or corrupt download is
 never selectable. After verification Vellum warms the selected local
 Transcription engine and keeps it resident. Normal startup verifies the local
 manifest and Dictation sessions use only local files; they make no
-model-download or cloud-inference requests.
+engine-download or cloud-inference requests.
 
-The selected model and additional Vocabulary hints are persisted in
+The selected Transcription engine and additional Vocabulary hints are persisted in
 `%LOCALAPPDATA%\Vellum\settings.json`. Enter one term per line (or
 comma-separated) in Settings; Vellum always also supplies its own name to the
 Transcription engine. Hints are passed directly to transcription, not used for
-post-transcription replacements. Set `VELLUM_MODEL_DIR` only to use an existing
+post-transcription replacements. Set `VELLUM_ENGINE_DIR` only to use an existing
 local `large-v3-turbo` directory (the directory name must remain
 `large-v3-turbo`).
 

@@ -15,10 +15,10 @@ class PrerequisiteProbe(Protocol):
     def cuda_available(self) -> bool: ...
 
     @property
-    def model_available(self) -> bool: ...
+    def engine_available(self) -> bool: ...
 
     @property
-    def model_directory(self) -> Path: ...
+    def engine_directory(self) -> Path: ...
 
 
 def require_startup_prerequisites(probe: PrerequisiteProbe) -> None:
@@ -26,8 +26,11 @@ def require_startup_prerequisites(probe: PrerequisiteProbe) -> None:
     missing: list[str] = []
     if not probe.cuda_available:
         missing.append("a CUDA-capable NVIDIA GPU usable by CTranslate2")
-    if not probe.model_available:
-        missing.append(f"the local large-v3-turbo model (expected at {probe.model_directory})")
+    if not probe.engine_available:
+        missing.append(
+            f"the local large-v3-turbo Transcription engine "
+            f"(expected at {probe.engine_directory})"
+        )
 
     if missing:
         bullets = "\n".join(f"- {item}" for item in missing)

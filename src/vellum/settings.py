@@ -6,10 +6,14 @@ from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from vellum.config import InputDevice, Settings, SettingsStore, unambiguous_input_devices
-from vellum.models import ModelDescriptor, ModelDownloadProgress, format_download_size
 from vellum.runtime import list_input_devices
+from vellum.transcription_engines import (
+    EngineDownloadProgress,
+    TranscriptionEngineDescriptor,
+    format_download_size,
+)
 
-ModelDownload = Callable[[Settings, Callable[[ModelDownloadProgress], None]], None]
+EngineDownload = Callable[[Settings, Callable[[EngineDownloadProgress], None]], None]
 
 
 class StartAtSignIn(Protocol):
@@ -73,15 +77,15 @@ class SettingsWindow:
         on_save: Callable[[Settings], None],
         *,
         input_devices: Callable[[], Sequence[InputDevice]] = list_input_devices,
-        models: Sequence[ModelDescriptor] = (),
-        model_available: Callable[[ModelDescriptor], bool] | None = None,
-        on_download: ModelDownload | None = None,
+        engines: Sequence[TranscriptionEngineDescriptor] = (),
+        engine_available: Callable[[TranscriptionEngineDescriptor], bool] | None = None,
+        on_download: EngineDownload | None = None,
     ) -> None:
         self._settings = settings
         self._on_save = on_save
         self._input_devices = input_devices
-        self._models = tuple(models)
-        self._model_available = model_available or (lambda _: False)
+        self._engines = tuple(engines)
+        self._engine_available = engine_available or (lambda _: False)
         self._on_download = on_download
 
     def show(self) -> None:
@@ -109,42 +113,42 @@ class SettingsWindow:
         vocabulary_hints.insert("1.0", "\n".join(self._settings.vocabulary_hints))
         error_text = tk.StringVar(value=load_error or "")
 
-        model_choices = {model.display_name: model for model in self._models}
-        selected_model = next(
+        engine_choices = {engine.display_name: engine for engine in self._engines}
+        selected_engine = next(
             (
                 label
-                for label, model in model_choices.items()
-                if model.id == self._settings.model_id
+                for label, engine in engine_choices.items()
+                if engine.id == self._settings.transcription_engine_id
             ),
-            next(iter(model_choices), ""),
+            next(iter(engine_choices), ""),
         )
-        model_selection = tk.StringVar(value=selected_model)
-        model_information = tk.StringVar()
+        engine_selection = tk.StringVar(value=selected_engine)
+        engine_information = tk.StringVar()
         download_status = tk.StringVar()
 
-        def chosen_model() -> ModelDescriptor | None:
-            return model_choices.get(model_selection.get())
+        def chosen_engine() -> TranscriptionEngineDescriptor | None:
+            return engine_choices.get(engine_selection.get())
 
-        def refresh_model_information() -> None:
-            model = chosen_model()
-            if model is None:
+        def refresh_engine_information() -> None:
+            engine = chosen_engine()
+            if engine is None:
                 return
             installed = (
                 "Installed and verified locally"
-                if self._model_available(model)
+                if self._engine_available(engine)
                 else "Not downloaded"
             )
-            download_size = format_download_size(model.download_size_bytes)
-            model_information.set(
-                f"Source: {model.source_url}\nDownload: {download_size}\nStatus: {installed}"
+            download_size = format_download_size(engine.download_size_bytes)
+            engine_information.set(
+                f"Source: {engine.source_url}\nDownload: {download_size}\nStatus: {installed}"
             )
 
         def form_settings() -> Settings:
             device = device_choices.get(input_device.get())
             if input_device.get() not in device_choices:
                 raise RuntimeError("Choose an Input device from the list.")
-            model = chosen_model()
-            if self._models and model is None:
+            engine = chosen_engine()
+            if self._engines and engine is None:
                 raise RuntimeError("Choose a Transcription engine from the list.")
             entered_hints = tuple(
                 hint
@@ -156,7 +160,9 @@ class SettingsWindow:
                 activation_hotkey=activation_hotkey.get(),
                 sounds_enabled=sounds_enabled.get(),
                 start_at_sign_in=start_at_sign_in.get(),
-                model_id=self._settings.model_id if model is None else model.id,
+                transcription_engine_id=(
+                    self._settings.transcription_engine_id if engine is None else engine.id
+                ),
                 vocabulary_hints=entered_hints,
             )
 
@@ -169,27 +175,27 @@ class SettingsWindow:
             window.destroy()
 
         row = 0
-        if self._models:
+        if self._engines:
             ttk.Label(frame, text="Transcription engine").grid(
                 row=row, column=0, sticky="w", pady=(0, 4)
             )
-            model_selector = ttk.Combobox(
+            engine_selector = ttk.Combobox(
                 frame,
                 state="readonly",
-                textvariable=model_selection,
-                values=tuple(model_choices),
+                textvariable=engine_selection,
+                values=tuple(engine_choices),
                 width=48,
             )
-            model_selector.grid(row=row, column=1, sticky="ew", pady=(0, 4))
-            model_selector.bind("<<ComboboxSelected>>", lambda _: refresh_model_information())
+            engine_selector.grid(row=row, column=1, sticky="ew", pady=(0, 4))
+            engine_selector.bind("<<ComboboxSelected>>", lambda _: refresh_engine_information())
             row += 1
-            ttk.Label(frame, textvariable=model_information, wraplength=430).grid(
+            ttk.Label(frame, textvariable=engine_information, wraplength=430).grid(
                 row=row, column=1, sticky="w", pady=(0, 4)
             )
-            refresh_model_information()
+            refresh_engine_information()
             row += 1
 
-            def update_download_progress(progress: ModelDownloadProgress) -> None:
+            def update_download_progress(progress: EngineDownloadProgress) -> None:
                 download_status.set(
                     f"{progress.current_file}: {progress.percentage}% "
                     f"({format_download_size(progress.downloaded_bytes)} of "
@@ -199,7 +205,9 @@ class SettingsWindow:
 
             def download() -> None:
                 if self._on_download is None:
-                    error_text.set("Model downloads are not available in this Vellum session.")
+                    error_text.set(
+                        "Transcription engine downloads are not available in this Vellum session."
+                    )
                     return
                 try:
                     updated_settings = form_settings()
@@ -211,11 +219,11 @@ class SettingsWindow:
                 download_status.set(
                     "Verified download; Vellum is warming the local Transcription engine."
                 )
-                refresh_model_information()
+                refresh_engine_information()
 
-            ttk.Button(frame, text="Download and verify model", command=download).grid(
-                row=row, column=1, sticky="w", pady=(0, 2)
-            )
+            ttk.Button(
+                frame, text="Download and verify Transcription engine", command=download
+            ).grid(row=row, column=1, sticky="w", pady=(0, 2))
             row += 1
             ttk.Label(frame, textvariable=download_status, wraplength=430).grid(
                 row=row, column=1, sticky="w", pady=(0, 4)

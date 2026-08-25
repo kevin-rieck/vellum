@@ -1,4 +1,4 @@
-"""Explicit acquisition and verification of Vellum's local Transcription engine."""
+"""Explicit acquisition and verification of Vellum's local Transcription engines."""
 
 from __future__ import annotations
 
@@ -15,25 +15,40 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-class ModelError(RuntimeError):
+@dataclass(frozen=True, slots=True)
+class TranscriptionEngineId:
+    """The stable identifier persisted for a selectable Transcription engine."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str) or not self.value.strip():
+            raise ValueError("A Transcription engine identifier must be non-empty text.")
+        object.__setattr__(self, "value", self.value.strip())
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class TranscriptionEngineError(RuntimeError):
     """Base class for failures while acquiring a local Transcription engine."""
 
 
-class ModelDownloadError(ModelError):
-    """The explicitly requested model download could not complete."""
+class TranscriptionEngineDownloadError(TranscriptionEngineError):
+    """The explicitly requested Transcription engine download could not complete."""
 
 
-class ModelVerificationError(ModelError):
-    """Downloaded model files do not match Vellum's pinned model manifest."""
+class TranscriptionEngineVerificationError(TranscriptionEngineError):
+    """Downloaded engine artifacts do not match Vellum's pinned manifest."""
 
 
-class ModelInstallationError(ModelError):
-    """A verified model could not be atomically made available to Vellum."""
+class TranscriptionEngineInstallationError(TranscriptionEngineError):
+    """A verified Transcription engine could not be atomically made available to Vellum."""
 
 
 @dataclass(frozen=True, slots=True)
-class ModelFile:
-    """A pinned model artifact that must be present before it can be selected."""
+class EngineArtifact:
+    """A pinned artifact that must be present before an engine can be selected."""
 
     name: str
     size_bytes: int
@@ -42,58 +57,65 @@ class ModelFile:
     def __post_init__(self) -> None:
         path = PurePosixPath(self.name)
         if not self.name or path.is_absolute() or ".." in path.parts or len(path.parts) != 1:
-            raise ValueError("A model artifact name must be one safe file name.")
+            raise ValueError("An engine artifact name must be one safe file name.")
         if self.size_bytes < 0:
-            raise ValueError("A model artifact size cannot be negative.")
+            raise ValueError("An engine artifact size cannot be negative.")
         if len(self.sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.sha256
         ):
-            raise ValueError("A model artifact SHA-256 must be a lowercase 64-character digest.")
+            raise ValueError("An engine artifact SHA-256 must be a lowercase 64-character digest.")
 
 
 @dataclass(frozen=True, slots=True)
-class ModelDescriptor:
-    """A selectable, immutable source and manifest for one local model."""
+class TranscriptionEngineDescriptor:
+    """A selectable, immutable source and manifest for one local Transcription engine."""
 
-    id: str
+    id: TranscriptionEngineId
     display_name: str
     repository: str
     revision: str
     directory_name: str
-    files: tuple[ModelFile, ...]
+    files: tuple[EngineArtifact, ...]
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip() for value in (self.id, self.display_name)
+        if isinstance(self.id, str):
+            try:
+                object.__setattr__(self, "id", TranscriptionEngineId(self.id))
+            except ValueError as error:
+                raise ValueError("A Transcription engine needs a stable identifier.") from error
+        if not isinstance(self.id, TranscriptionEngineId):
+            raise ValueError("A Transcription engine needs a stable identifier.")
+        if not isinstance(self.display_name, str) or not self.display_name.strip():
+            raise ValueError("A Transcription engine needs a display name.")
+        if self.repository.count("/") != 1 or any(
+            not part for part in self.repository.split("/")
         ):
-            raise ValueError("A model needs a stable ID and display name.")
-        if self.repository.count("/") != 1 or any(not part for part in self.repository.split("/")):
-            raise ValueError("A model repository must be an owner/name Hugging Face repository.")
+            raise ValueError("An engine repository must be an owner/name Hugging Face repository.")
         if len(self.revision) != 40 or any(
             character not in "0123456789abcdef" for character in self.revision
         ):
-            raise ValueError("A model revision must be a pinned Git revision.")
+            raise ValueError("An engine revision must be a pinned Git revision.")
         if PurePosixPath(self.directory_name).name != self.directory_name:
-            raise ValueError("A model directory name must not contain a path.")
+            raise ValueError("An engine directory name must not contain a path.")
         if not self.files:
-            raise ValueError("A model manifest must contain at least one artifact.")
-        if len({model_file.name for model_file in self.files}) != len(self.files):
-            raise ValueError("A model manifest cannot contain duplicate artifact names.")
+            raise ValueError("An engine manifest must contain at least one artifact.")
+        if len({artifact.name for artifact in self.files}) != len(self.files):
+            raise ValueError("An engine manifest cannot contain duplicate artifact names.")
 
     @property
     def source_url(self) -> str:
-        """Return the immutable, user-visible source for this model."""
+        """Return the immutable, user-visible source for this engine."""
         return f"https://huggingface.co/{self.repository}/tree/{self.revision}"
 
     @property
     def download_size_bytes(self) -> int:
         """Return the total number of artifact bytes that Vellum will download."""
-        return sum(model_file.size_bytes for model_file in self.files)
+        return sum(artifact.size_bytes for artifact in self.files)
 
 
 @dataclass(frozen=True, slots=True)
-class ModelDownloadProgress:
-    """The visible progress of one explicit model acquisition."""
+class EngineDownloadProgress:
+    """The visible progress of one explicit Transcription engine acquisition."""
 
     downloaded_bytes: int
     total_bytes: int
@@ -106,126 +128,126 @@ class ModelDownloadProgress:
         return min(100, self.downloaded_bytes * 100 // self.total_bytes)
 
 
-class ModelDownloadClient(Protocol):
+class EngineDownloadClient(Protocol):
     """The narrow download seam used by the verified installer."""
 
     def download(
         self,
-        descriptor: ModelDescriptor,
-        model_file: ModelFile,
+        descriptor: TranscriptionEngineDescriptor,
+        artifact: EngineArtifact,
         destination: Path,
         on_progress: Callable[[int], None],
     ) -> None: ...
 
 
-class ModelDownloader:
-    """Downloads pinned model artifacts from their public Hugging Face source."""
+class EngineDownloader:
+    """Downloads pinned engine artifacts from their public Hugging Face source."""
 
     _CHUNK_SIZE = 1024 * 1024
 
     def download(
         self,
-        descriptor: ModelDescriptor,
-        model_file: ModelFile,
+        descriptor: TranscriptionEngineDescriptor,
+        artifact: EngineArtifact,
         destination: Path,
         on_progress: Callable[[int], None],
     ) -> None:
-        """Download one file and report its received byte count as it streams."""
+        """Download one artifact and report its received byte count as it streams."""
         source_url = (
             f"https://huggingface.co/{descriptor.repository}/resolve/{descriptor.revision}/"
-            f"{quote(model_file.name)}"
+            f"{quote(artifact.name)}"
         )
         downloaded_bytes = 0
         try:
-            request = Request(source_url, headers={"User-Agent": "Vellum model downloader"})
+            request = Request(source_url, headers={"User-Agent": "Vellum engine downloader"})
             with urlopen(request, timeout=60) as response, destination.open("wb") as output:
                 while chunk := response.read(self._CHUNK_SIZE):
                     output.write(chunk)
                     downloaded_bytes += len(chunk)
                     on_progress(downloaded_bytes)
         except (HTTPError, URLError, OSError) as error:
-            raise ModelDownloadError(
-                f"Vellum could not download {model_file.name} from {descriptor.source_url}: {error}"
+            raise TranscriptionEngineDownloadError(
+                f"Vellum could not download {artifact.name} from {descriptor.source_url}: {error}"
             ) from error
 
 
-class ModelVerifier:
-    """Verifies every artifact against the model's pinned SHA-256 manifest."""
+class EngineVerifier:
+    """Verifies every artifact against the engine's pinned SHA-256 manifest."""
 
     _CHUNK_SIZE = 1024 * 1024
 
-    def verify(self, descriptor: ModelDescriptor, model_directory: Path) -> None:
+    def verify(self, descriptor: TranscriptionEngineDescriptor, engine_directory: Path) -> None:
         """Raise a descriptive error unless every expected local artifact is exact."""
-        for model_file in descriptor.files:
-            file_path = model_directory / model_file.name
+        for artifact in descriptor.files:
+            file_path = engine_directory / artifact.name
             if not file_path.is_file():
-                raise ModelVerificationError(
+                raise TranscriptionEngineVerificationError(
                     f"Vellum could not verify {descriptor.display_name}: "
-                    f"{model_file.name} is missing."
+                    f"{artifact.name} is missing."
                 )
             try:
                 actual_size = file_path.stat().st_size
             except OSError as error:
-                raise ModelVerificationError(
+                raise TranscriptionEngineVerificationError(
                     f"Vellum could not verify {descriptor.display_name}: "
-                    f"could not read {model_file.name}."
+                    f"could not read {artifact.name}."
                 ) from error
-            if actual_size != model_file.size_bytes:
-                raise ModelVerificationError(
-                    f"Vellum could not verify {descriptor.display_name}: {model_file.name} has "
-                    f"{actual_size} bytes; expected {model_file.size_bytes}."
+            if actual_size != artifact.size_bytes:
+                raise TranscriptionEngineVerificationError(
+                    f"Vellum could not verify {descriptor.display_name}: {artifact.name} has "
+                    f"{actual_size} bytes; expected {artifact.size_bytes}."
                 )
 
             digest = hashlib.sha256()
             try:
-                with file_path.open("rb") as artifact:
-                    while chunk := artifact.read(self._CHUNK_SIZE):
+                with file_path.open("rb") as downloaded_artifact:
+                    while chunk := downloaded_artifact.read(self._CHUNK_SIZE):
                         digest.update(chunk)
             except OSError as error:
-                raise ModelVerificationError(
+                raise TranscriptionEngineVerificationError(
                     f"Vellum could not verify {descriptor.display_name}: "
-                    f"could not read {model_file.name}."
+                    f"could not read {artifact.name}."
                 ) from error
-            if digest.hexdigest() != model_file.sha256:
-                raise ModelVerificationError(
-                    f"Vellum could not verify {descriptor.display_name}: {model_file.name} failed "
+            if digest.hexdigest() != artifact.sha256:
+                raise TranscriptionEngineVerificationError(
+                    f"Vellum could not verify {descriptor.display_name}: {artifact.name} failed "
                     "its SHA-256 check."
                 )
 
 
-class ModelInstaller:
-    """Stages, verifies, and atomically installs only an explicitly selected model."""
+class EngineInstaller:
+    """Stages, verifies, and atomically installs an explicitly selected engine."""
 
     def __init__(
         self,
         destination: Path,
         *,
-        downloader: ModelDownloadClient | None = None,
-        verifier: ModelVerifier | None = None,
+        downloader: EngineDownloadClient | None = None,
+        verifier: EngineVerifier | None = None,
     ) -> None:
         self._destination = destination
-        self._downloader = downloader or ModelDownloader()
-        self._verifier = verifier or ModelVerifier()
+        self._downloader = downloader or EngineDownloader()
+        self._verifier = verifier or EngineVerifier()
 
     def install(
         self,
-        descriptor: ModelDescriptor,
-        on_progress: Callable[[ModelDownloadProgress], None],
+        descriptor: TranscriptionEngineDescriptor,
+        on_progress: Callable[[EngineDownloadProgress], None],
     ) -> None:
-        """Download, verify, and promote a model without exposing partial artifacts."""
+        """Download, verify, and promote an engine without exposing partial artifacts."""
         if self._destination.name != descriptor.directory_name:
-            raise ModelInstallationError(
+            raise TranscriptionEngineInstallationError(
                 f"Vellum installs {descriptor.display_name} at a directory named "
                 f"{descriptor.directory_name}."
             )
 
         try:
             self._verifier.verify(descriptor, self._destination)
-        except ModelVerificationError:
+        except TranscriptionEngineVerificationError:
             pass
         else:
             on_progress(
-                ModelDownloadProgress(
+                EngineDownloadProgress(
                     descriptor.download_size_bytes,
                     descriptor.download_size_bytes,
                     "Verified download",
@@ -242,41 +264,42 @@ class ModelInstaller:
                 )
             )
         except OSError as error:
-            raise ModelInstallationError(
-                f"Vellum could not prepare {self._destination.parent} for a model download: {error}"
+            raise TranscriptionEngineInstallationError(
+                f"Vellum could not prepare {self._destination.parent} for an engine download: "
+                f"{error}"
             ) from error
 
         try:
             downloaded_before_file = 0
             on_progress(
-                ModelDownloadProgress(0, descriptor.download_size_bytes, "Preparing download")
+                EngineDownloadProgress(0, descriptor.download_size_bytes, "Preparing download")
             )
-            for model_file in descriptor.files:
-                destination = staging_directory / model_file.name
+            for artifact in descriptor.files:
+                destination = staging_directory / artifact.name
 
                 def report_file_progress(
-                    downloaded_bytes: int, *, file: ModelFile = model_file
+                    downloaded_bytes: int, *, file: EngineArtifact = artifact
                 ) -> None:
                     on_progress(
-                        ModelDownloadProgress(
+                        EngineDownloadProgress(
                             downloaded_before_file + min(downloaded_bytes, file.size_bytes),
                             descriptor.download_size_bytes,
                             file.name,
                         )
                     )
 
-                self._downloader.download(descriptor, model_file, destination, report_file_progress)
-                downloaded_before_file += model_file.size_bytes
+                self._downloader.download(descriptor, artifact, destination, report_file_progress)
+                downloaded_before_file += artifact.size_bytes
                 on_progress(
-                    ModelDownloadProgress(
-                        downloaded_before_file, descriptor.download_size_bytes, model_file.name
+                    EngineDownloadProgress(
+                        downloaded_before_file, descriptor.download_size_bytes, artifact.name
                     )
                 )
 
             self._verifier.verify(descriptor, staging_directory)
             self._promote(staging_directory)
             on_progress(
-                ModelDownloadProgress(
+                EngineDownloadProgress(
                     descriptor.download_size_bytes,
                     descriptor.download_size_bytes,
                     "Verified download",
@@ -287,7 +310,7 @@ class ModelInstaller:
                 shutil.rmtree(staging_directory, ignore_errors=True)
 
     def _promote(self, staging_directory: Path) -> None:
-        """Atomically replace an incomplete previous directory only after verification."""
+        """Atomically replace an incomplete previous directory after verification."""
         backup_directory: Path | None = None
         try:
             if self._destination.exists():
@@ -306,8 +329,8 @@ class ModelInstaller:
                     backup_directory.replace(self._destination)
                 except OSError:
                     pass
-            raise ModelInstallationError(
-                f"Vellum verified the model but could not install it at "
+            raise TranscriptionEngineInstallationError(
+                f"Vellum verified the engine but could not install it at "
                 f"{self._destination}: {error}"
             ) from error
         else:
@@ -316,7 +339,7 @@ class ModelInstaller:
 
 
 def format_download_size(size_bytes: int) -> str:
-    """Format a model's exact declared size for the Settings window."""
+    """Format an engine's exact declared size for the Settings window."""
     if size_bytes < 1024:
         return f"{size_bytes} B"
     if size_bytes < 1024**2:
@@ -326,34 +349,34 @@ def format_download_size(size_bytes: int) -> str:
     return f"{size_bytes / 1024**3:.2f} GiB"
 
 
-LARGE_V3_TURBO = ModelDescriptor(
-    id="large-v3-turbo",
+LARGE_V3_TURBO = TranscriptionEngineDescriptor(
+    id=TranscriptionEngineId("large-v3-turbo"),
     display_name="large-v3-turbo",
     repository="deepdml/faster-whisper-large-v3-turbo-ct2",
     revision="4df90f75321148c3a29a9e2351b7ddf8f5b115a8",
     directory_name="large-v3-turbo",
     files=(
-        ModelFile(
+        EngineArtifact(
             "config.json",
             2_263,
             "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e",
         ),
-        ModelFile(
+        EngineArtifact(
             "model.bin",
             1_617_884_929,
             "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da",
         ),
-        ModelFile(
+        EngineArtifact(
             "preprocessor_config.json",
             340,
             "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711",
         ),
-        ModelFile(
+        EngineArtifact(
             "tokenizer.json",
             2_710_337,
             "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd",
         ),
-        ModelFile(
+        EngineArtifact(
             "vocabulary.json",
             1_068_114,
             "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1",
@@ -361,12 +384,18 @@ LARGE_V3_TURBO = ModelDescriptor(
     ),
 )
 
-SUPPORTED_MODELS = (LARGE_V3_TURBO,)
+SUPPORTED_TRANSCRIPTION_ENGINES = (LARGE_V3_TURBO,)
 
 
-def model_by_id(model_id: str) -> ModelDescriptor:
-    """Return the selectable model identified by a persisted settings value."""
-    for descriptor in SUPPORTED_MODELS:
-        if descriptor.id == model_id:
+def transcription_engine_by_id(
+    engine_id: TranscriptionEngineId | str,
+) -> TranscriptionEngineDescriptor:
+    """Return the selectable engine identified by a persisted settings value."""
+    if isinstance(engine_id, str):
+        engine_id = TranscriptionEngineId(engine_id)
+    if not isinstance(engine_id, TranscriptionEngineId):
+        raise TypeError("A Transcription engine identifier must be text.")
+    for descriptor in SUPPORTED_TRANSCRIPTION_ENGINES:
+        if descriptor.id == engine_id:
             return descriptor
-    raise ValueError(f"Vellum does not support the model {model_id!r}.")
+    raise ValueError(f"Vellum does not support the Transcription engine {str(engine_id)!r}.")

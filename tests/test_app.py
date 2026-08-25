@@ -9,12 +9,12 @@ from vellum.config import Settings, VellumPaths
 from vellum.startup import StartupPrerequisiteError
 
 
-class PassingModelVerifier:
+class PassingEngineVerifier:
     def verify(self, *_: object) -> None:
         pass
 
 
-def test_missing_model_keeps_the_tray_open_for_explicit_setup(
+def test_missing_engine_keeps_the_tray_open_for_explicit_setup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     paths = VellumPaths(tmp_path / "models" / "large-v3-turbo", tmp_path / "Vellum")
@@ -35,9 +35,9 @@ def test_missing_model_keeps_the_tray_open_for_explicit_setup(
             pass
 
     class FakeProbe:
-        model_available = False
+        engine_available = False
         cuda_available = True
-        model_directory = paths.model_directory
+        engine_directory = paths.engine_directory
 
     class FakeTray:
         def __init__(self, _: Settings) -> None:
@@ -46,10 +46,10 @@ def test_missing_model_keeps_the_tray_open_for_explicit_setup(
         def set_settings_controller(self, _: object) -> None:
             events.append("settings")
 
-        def set_model_onboarding(self, *_: object) -> None:
+        def set_engine_onboarding(self, *_: object) -> None:
             events.append("onboarding")
 
-        def model_setup_required(self) -> None:
+        def engine_setup_required(self) -> None:
             events.append("setup-required")
 
         def fail_startup(self, _: Exception) -> None:
@@ -72,7 +72,7 @@ def test_missing_model_keeps_the_tray_open_for_explicit_setup(
     assert events == ["constructed", "settings", "onboarding", "setup-required", "run"]
 
 
-def test_startup_warms_the_selected_model_with_persisted_vocabulary_hints(
+def test_startup_warms_the_selected_engine_with_persisted_vocabulary_hints(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     paths = VellumPaths(tmp_path / "models" / "large-v3-turbo", tmp_path / "Vellum")
@@ -104,11 +104,11 @@ def test_startup_warms_the_selected_model_with_persisted_vocabulary_hints(
 
     class FakeEngine:
         def __init__(
-            self, model_directory: Path, vocabulary_hints: tuple[str, ...], on_ready: object
+            self, engine_directory: Path, vocabulary_hints: tuple[str, ...], on_ready: object
         ) -> None:
             assert callable(on_ready)
             self._on_ready = on_ready
-            warmed_with.append((model_directory, vocabulary_hints))
+            warmed_with.append((engine_directory, vocabulary_hints))
 
         def start_warming(self) -> None:
             self._on_ready(None)
@@ -143,7 +143,7 @@ def test_startup_warms_the_selected_model_with_persisted_vocabulary_hints(
         def set_settings_controller(self, _: object) -> None:
             pass
 
-        def set_model_onboarding(self, *_: object) -> None:
+        def set_engine_onboarding(self, *_: object) -> None:
             pass
 
         def warming(self) -> None:
@@ -172,7 +172,7 @@ def test_startup_warms_the_selected_model_with_persisted_vocabulary_hints(
     monkeypatch.setattr(app, "SettingsController", FakeSettingsController)
     monkeypatch.setattr(app, "TrayApplication", FakeTray)
     monkeypatch.setattr(app, "WindowsPrerequisiteProbe", lambda *_: object())
-    monkeypatch.setattr(app, "ModelVerifier", PassingModelVerifier)
+    monkeypatch.setattr(app, "EngineVerifier", PassingEngineVerifier)
     monkeypatch.setattr(app, "require_startup_prerequisites", lambda _: None)
     monkeypatch.setattr(app, "SoundDeviceRecorder", lambda **_: FakeRecorder())
     monkeypatch.setattr(app, "AsyncFasterWhisperTranscriptionEngine", FakeEngine)
@@ -180,7 +180,7 @@ def test_startup_warms_the_selected_model_with_persisted_vocabulary_hints(
     monkeypatch.setattr(app, "PushToTalkHotkey", FakeHotkey)
 
     assert app.main() == 0
-    assert warmed_with == [(paths.model_directory, ("Vellum", "CTranslate2"))]
+    assert warmed_with == [(paths.engine_directory, ("Vellum", "CTranslate2"))]
     assert updated_hints == [("Vellum", "CUDA")]
 
 
@@ -204,7 +204,7 @@ def test_prerequisite_failure_runs_the_tray_until_the_user_quits(
         def set_settings_controller(self, _: object) -> None:
             pass
 
-        def set_model_onboarding(self, *_: object) -> None:
+        def set_engine_onboarding(self, *_: object) -> None:
             pass
 
         def fail_startup(self, _: Exception) -> None:
@@ -221,7 +221,7 @@ def test_prerequisite_failure_runs_the_tray_until_the_user_quits(
     monkeypatch.setattr(app, "SettingsStore", FakeSettingsStore)
     monkeypatch.setattr(app, "TrayApplication", FakeTray)
     monkeypatch.setattr(app, "WindowsPrerequisiteProbe", lambda *_: object())
-    monkeypatch.setattr(app, "ModelVerifier", PassingModelVerifier)
+    monkeypatch.setattr(app, "EngineVerifier", PassingEngineVerifier)
 
     def fail_prerequisites(_: object) -> None:
         raise StartupPrerequisiteError("CUDA unavailable")

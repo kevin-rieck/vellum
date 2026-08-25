@@ -11,8 +11,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_SETTINGS_VERSION = 2
-_PREVIOUS_SETTINGS_VERSION = 1
+from vellum.transcription_engines import (
+    LARGE_V3_TURBO,
+    TranscriptionEngineId,
+    transcription_engine_by_id,
+)
+
+_SETTINGS_VERSION = 3
+_PREVIOUS_SETTINGS_VERSION = 2
+_LEGACY_SETTINGS_VERSION = 1
 _MODIFIER_ORDER = ("Ctrl", "Alt", "Shift", "Win")
 _MODIFIER_ALIASES = {
     "ctrl": "Ctrl",
@@ -149,7 +156,7 @@ class Settings:
     activation_hotkey: str = "Ctrl+Alt+Space"
     sounds_enabled: bool = True
     start_at_sign_in: bool = False
-    model_id: str = "large-v3-turbo"
+    transcription_engine_id: TranscriptionEngineId = LARGE_V3_TURBO.id
     vocabulary_hints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -164,15 +171,20 @@ class Settings:
             raise SettingsError("The sounds preference must be true or false.")
         if not isinstance(self.start_at_sign_in, bool):
             raise SettingsError("The start-at-sign-in preference must be true or false.")
-        if not isinstance(self.model_id, str):
-            raise SettingsError("The selected model must be text.")
-        from vellum.models import model_by_id
-
+        if isinstance(self.transcription_engine_id, str):
+            try:
+                engine_id = TranscriptionEngineId(self.transcription_engine_id)
+            except ValueError as error:
+                raise SettingsError("The selected Transcription engine must be text.") from error
+            object.__setattr__(self, "transcription_engine_id", engine_id)
+        if not isinstance(self.transcription_engine_id, TranscriptionEngineId):
+            raise SettingsError("The selected Transcription engine must be identified by an ID.")
         try:
-            model_by_id(self.model_id)
-        except ValueError as error:
+            transcription_engine_by_id(self.transcription_engine_id)
+        except (TypeError, ValueError) as error:
             raise SettingsError(
-                f"The selected model is not supported: {self.model_id!r}."
+                f"The selected Transcription engine is not supported: "
+                f"{str(self.transcription_engine_id)!r}."
             ) from error
         object.__setattr__(
             self, "vocabulary_hints", normalise_vocabulary_hints(self.vocabulary_hints)
@@ -194,7 +206,7 @@ class Settings:
             "activation_hotkey": self.activation_hotkey,
             "sounds_enabled": self.sounds_enabled,
             "start_at_sign_in": self.start_at_sign_in,
-            "model_id": self.model_id,
+            "engine_id": str(self.transcription_engine_id),
             "vocabulary_hints": list(self.vocabulary_hints),
         }
 
@@ -203,7 +215,7 @@ class Settings:
         if not isinstance(value, dict):
             raise SettingsError("Settings must be a JSON object.")
         version = value.get("version")
-        if version not in (_PREVIOUS_SETTINGS_VERSION, _SETTINGS_VERSION):
+        if version not in (_LEGACY_SETTINGS_VERSION, _PREVIOUS_SETTINGS_VERSION, _SETTINGS_VERSION):
             raise SettingsError("Settings use an unsupported version.")
 
         input_device_value = value.get("input_device")
@@ -218,10 +230,13 @@ class Settings:
         else:
             raise SettingsError("The Input device must be an object or null.")
 
-        model_id = "large-v3-turbo"
+        engine_id = str(LARGE_V3_TURBO.id)
         vocabulary_hints: tuple[str, ...] = ()
-        if version == _SETTINGS_VERSION:
-            model_id = _required_string(value, "model_id", "Settings")
+        if version == _PREVIOUS_SETTINGS_VERSION:
+            engine_id = _required_string(value, "model_id", "Settings")
+            vocabulary_hints = _required_vocabulary_hints(value)
+        elif version == _SETTINGS_VERSION:
+            engine_id = _required_string(value, "engine_id", "Settings")
             vocabulary_hints = _required_vocabulary_hints(value)
 
         return cls(
@@ -229,7 +244,7 @@ class Settings:
             activation_hotkey=_required_string(value, "activation_hotkey", "Settings"),
             sounds_enabled=_required_bool(value, "sounds_enabled"),
             start_at_sign_in=_required_bool(value, "start_at_sign_in"),
-            model_id=model_id,
+            transcription_engine_id=TranscriptionEngineId(engine_id),
             vocabulary_hints=vocabulary_hints,
         )
 
@@ -309,7 +324,7 @@ class SettingsStore:
 class VellumPaths:
     """Locations owned by Vellum; no Dictation session data is persisted here."""
 
-    model_directory: Path
+    engine_directory: Path
     application_directory: Path
 
     @property
@@ -326,14 +341,14 @@ class VellumPaths:
     def from_environment(cls) -> VellumPaths:
         local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         application_directory = local_app_data / "Vellum"
-        configured_model = os.environ.get("VELLUM_MODEL_DIR")
-        if configured_model:
+        configured_engine = os.environ.get("VELLUM_ENGINE_DIR")
+        if configured_engine:
             return cls(
-                model_directory=Path(configured_model).expanduser(),
+                engine_directory=Path(configured_engine).expanduser(),
                 application_directory=application_directory,
             )
 
         return cls(
-            model_directory=application_directory / "models" / "large-v3-turbo",
+            engine_directory=application_directory / "engines" / "large-v3-turbo",
             application_directory=application_directory,
         )

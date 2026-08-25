@@ -133,27 +133,27 @@ def test_engine_rejects_a_cuda_runtime_that_fails_on_lazy_inference(
     assert raised.value.__cause__ is inference_error
 
 
-def test_model_prerequisite_requires_all_files_in_the_selected_model_manifest(
+def test_engine_prerequisite_requires_all_files_in_the_selected_engine_manifest(
     tmp_path: Path,
 ) -> None:
-    model_directory = tmp_path / "large-v3-turbo"
-    model_directory.mkdir()
+    engine_directory = tmp_path / "large-v3-turbo"
+    engine_directory.mkdir()
     for file_name in ("model.bin", "config.json", "tokenizer.json"):
-        (model_directory / file_name).touch()
-    probe = WindowsPrerequisiteProbe(model_directory)
+        (engine_directory / file_name).touch()
+    probe = WindowsPrerequisiteProbe(engine_directory)
 
-    assert probe.model_available is False
+    assert probe.engine_available is False
 
     for file_name in ("preprocessor_config.json", "vocabulary.json"):
-        (model_directory / file_name).touch()
+        (engine_directory / file_name).touch()
 
-    assert probe.model_available is True
+    assert probe.engine_available is True
 
 
-def test_model_prerequisite_rejects_a_different_local_model(tmp_path: Path) -> None:
-    model_directory = tmp_path / "small"
-    model_directory.mkdir()
+def test_engine_prerequisite_rejects_a_different_local_engine(tmp_path: Path) -> None:
+    engine_directory = tmp_path / "small"
+    engine_directory.mkdir()
     for file_name in ("model.bin", "config.json", "tokenizer.json"):
-        (model_directory / file_name).touch()
+        (engine_directory / file_name).touch()
 
-    assert WindowsPrerequisiteProbe(model_directory).model_available is False
+    assert WindowsPrerequisiteProbe(engine_directory).engine_available is False

@@ -8,14 +8,6 @@ from collections.abc import Callable, Sequence
 from vellum.config import Settings, SettingsError, SettingsStore, VellumPaths
 from vellum.diagnostics import configure_diagnostics, log_error
 from vellum.hotkey import PushToTalkHotkey
-from vellum.models import (
-    SUPPORTED_MODELS,
-    ModelDownloadProgress,
-    ModelInstaller,
-    ModelVerificationError,
-    ModelVerifier,
-    model_by_id,
-)
 from vellum.runtime import (
     AsyncFasterWhisperTranscriptionEngine,
     SoundDeviceRecorder,
@@ -24,6 +16,15 @@ from vellum.runtime import (
 from vellum.session import DictationSession, SessionFeedback
 from vellum.settings import SettingsController
 from vellum.startup import StartupPrerequisiteError, require_startup_prerequisites
+from vellum.transcription_engines import (
+    SUPPORTED_TRANSCRIPTION_ENGINES,
+    EngineDownloadProgress,
+    EngineInstaller,
+    EngineVerifier,
+    TranscriptionEngineId,
+    TranscriptionEngineVerificationError,
+    transcription_engine_by_id,
+)
 from vellum.tray import TrayApplication
 from vellum.windows import WindowsClipboard, WindowsFocus, WindowsPaste, WindowsStartAtSignIn
 
@@ -83,34 +84,32 @@ def main(arguments: Sequence[str] | None = None) -> int:
     )
     tray.set_settings_controller(settings_controller)
 
-    def model_files_available(model_id: str) -> bool:
-        descriptor = model_by_id(model_id)
-        probe = WindowsPrerequisiteProbe(paths.model_directory, descriptor)
-        return getattr(probe, "model_available", True)
+    def prerequisite_probe(engine_id: TranscriptionEngineId) -> WindowsPrerequisiteProbe:
+        descriptor = transcription_engine_by_id(engine_id)
+        return WindowsPrerequisiteProbe(paths.engine_directory, descriptor)
 
-    def model_available(model_id: str) -> bool:
-        descriptor = model_by_id(model_id)
-        if not model_files_available(model_id):
+    def engine_available(engine_id: TranscriptionEngineId) -> bool:
+        descriptor = transcription_engine_by_id(engine_id)
+        probe = prerequisite_probe(engine_id)
+        if not getattr(probe, "engine_available", True):
             return False
         try:
-            ModelVerifier().verify(descriptor, paths.model_directory)
-        except ModelVerificationError:
+            EngineVerifier().verify(descriptor, paths.engine_directory)
+        except TranscriptionEngineVerificationError:
             return False
         return True
 
-    def cuda_available(model_id: str) -> bool:
-        descriptor = model_by_id(model_id)
-        probe = WindowsPrerequisiteProbe(paths.model_directory, descriptor)
-        return getattr(probe, "cuda_available", True)
+    def cuda_available(engine_id: TranscriptionEngineId) -> bool:
+        return getattr(prerequisite_probe(engine_id), "cuda_available", True)
 
     def start_runtime(
-        updated_settings: Settings, *, model_verified: bool = False
+        updated_settings: Settings, *, engine_verified: bool = False
     ) -> PushToTalkHotkey:
         nonlocal recorder, session, transcription_engine
-        descriptor = model_by_id(updated_settings.model_id)
-        require_startup_prerequisites(WindowsPrerequisiteProbe(paths.model_directory, descriptor))
-        if not model_verified:
-            ModelVerifier().verify(descriptor, paths.model_directory)
+        descriptor = transcription_engine_by_id(updated_settings.transcription_engine_id)
+        require_startup_prerequisites(prerequisite_probe(updated_settings.transcription_engine_id))
+        if not engine_verified:
+            EngineVerifier().verify(descriptor, paths.engine_directory)
         recorder = SoundDeviceRecorder(input_device=updated_settings.input_device)
         runtime_hotkey: PushToTalkHotkey | None = None
 
@@ -125,7 +124,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             tray.feedback(SessionFeedback.IDLE)
 
         transcription_engine = AsyncFasterWhisperTranscriptionEngine(
-            paths.model_directory, updated_settings.transcription_vocabulary_hints, warmed
+            paths.engine_directory, updated_settings.transcription_vocabulary_hints, warmed
         )
         session = DictationSession(
             recorder=recorder,
@@ -142,34 +141,34 @@ def main(arguments: Sequence[str] | None = None) -> int:
         transcription_engine.start_warming()
         return runtime_hotkey
 
-    def download_model(
-        updated_settings: Settings, on_progress: Callable[[ModelDownloadProgress], None]
+    def download_engine(
+        updated_settings: Settings, on_progress: Callable[[EngineDownloadProgress], None]
     ) -> None:
         nonlocal hotkey, runtime_started
-        descriptor = model_by_id(updated_settings.model_id)
-        ModelInstaller(paths.model_directory).install(descriptor, on_progress)
+        descriptor = transcription_engine_by_id(updated_settings.transcription_engine_id)
+        EngineInstaller(paths.engine_directory).install(descriptor, on_progress)
         if runtime_started:
             return
         try:
-            hotkey = start_runtime(updated_settings, model_verified=True)
+            hotkey = start_runtime(updated_settings, engine_verified=True)
         except (RuntimeError, StartupPrerequisiteError) as error:
             tray.fail_startup(error)
             raise
         runtime_started = True
         tray.activate_hotkey(hotkey)
 
-    tray.set_model_onboarding(
-        SUPPORTED_MODELS,
-        lambda descriptor: model_available(descriptor.id),
-        download_model,
+    tray.set_engine_onboarding(
+        SUPPORTED_TRANSCRIPTION_ENGINES,
+        lambda descriptor: engine_available(descriptor.id),
+        download_engine,
     )
 
     try:
         hotkey = start_runtime(settings)
     except (RuntimeError, StartupPrerequisiteError) as error:
-        if not model_available(settings.model_id):
-            tray.model_setup_required()
-            if not cuda_available(settings.model_id):
+        if not engine_available(settings.transcription_engine_id):
+            tray.engine_setup_required()
+            if not cuda_available(settings.transcription_engine_id):
                 tray.report_error(error)
             elif settings_load_error is not None:
                 tray.report_error(settings_load_error)

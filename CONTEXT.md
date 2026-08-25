@@ -26,7 +26,7 @@ The privacy boundary under which Dictation session audio, transcripts, and deriv
 _Avoid_: Private mode, offline-capable
 
 **Transcription engine**:
-A replaceable local component that converts Dictation session audio into a transcript. V1 uses the explicitly selected `large-v3-turbo` faster-whisper model, verifies its download before atomically installing it, warms asynchronously at Tray application startup, and remains resident while it runs.
+A replaceable local component that converts Dictation session audio into a transcript. V1 uses the explicitly selected `large-v3-turbo` faster-whisper Transcription engine, verifies its download before atomically installing it, warms asynchronously at Tray application startup, and remains resident while it runs.
 _Avoid_: Whisper, model
 
 **Transcript**:
