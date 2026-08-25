@@ -43,6 +43,18 @@ class Inserter(Protocol):
     def paste(self, insertion_target: InsertionTarget) -> bool: ...
 
 
+class DictationState(Enum):
+    """The mutually exclusive lifecycle states of one Dictation session."""
+
+    IDLE = "idle"
+    RECORDING = "recording"
+    TRANSCRIBING = "transcribing"
+
+
+# SessionState is a readable compatibility alias for callers that prefer the shorter name.
+SessionState = DictationState
+
+
 class SessionFeedback(Enum):
     IDLE = "idle"
     RECORDING = "recording"
@@ -76,11 +88,16 @@ class DictationSession:
         self._clipboard = clipboard
         self._inserter = inserter
         self._feedback = feedback
-        self._active = False
+        self._state = DictationState.IDLE
+
+    @property
+    def state(self) -> DictationState:
+        """Return the current state at the public Dictation session seam."""
+        return self._state
 
     @property
     def active(self) -> bool:
-        return self._active
+        return self._state is not DictationState.IDLE
 
     def start(self) -> None:
         """Start capture if this is not already an active Dictation session.
@@ -89,10 +106,10 @@ class DictationSession:
         failure. A cleanup failure leaves the session active because capture may
         still be running, and both failures are reported together.
         """
-        if self._active:
+        if self._state is not DictationState.IDLE:
             return
         self._recorder.start()
-        self._active = True
+        self._state = DictationState.RECORDING
         try:
             self._feedback(SessionFeedback.RECORDING)
         except Exception as feedback_error:
@@ -103,7 +120,7 @@ class DictationSession:
                     "Could not publish recording feedback or stop microphone capture.",
                     [feedback_error, cleanup_error],
                 ) from None
-            self._active = False
+            self._state = DictationState.IDLE
             raise
 
     def end_capture(self) -> PendingTranscription:
@@ -113,7 +130,7 @@ class DictationSession:
         a second Push-to-talk activation cannot queue or overlap while transcription
         is in progress.
         """
-        if not self._active:
+        if self._state is not DictationState.RECORDING:
             raise RuntimeError("No Dictation session is active.")
 
         capture_stopped = False
@@ -121,6 +138,7 @@ class DictationSession:
             audio = self._recorder.stop()
             capture_stopped = True
             insertion_target = self._focus.foreground_target()
+            self._state = DictationState.TRANSCRIBING
             self._feedback(SessionFeedback.TRANSCRIBING)
             return PendingTranscription(audio, insertion_target)
         except Exception:
@@ -129,13 +147,13 @@ class DictationSession:
                     self._recorder.stop()
                 except Exception:
                     pass
-            self._active = False
+            self._state = DictationState.IDLE
             self._feedback(SessionFeedback.ERROR)
             raise
 
     def finish_transcription(self, pending: PendingTranscription) -> None:
         """Transcribe stopped audio and insert only into its capture-end target."""
-        if not self._active:
+        if self._state is not DictationState.TRANSCRIBING:
             return
 
         try:
@@ -157,7 +175,7 @@ class DictationSession:
             self._feedback(SessionFeedback.ERROR)
             raise
         finally:
-            self._active = False
+            self._state = DictationState.IDLE
 
     def _cancel_insertion(self) -> None:
         self._feedback(SessionFeedback.CANCELLED)
@@ -165,6 +183,6 @@ class DictationSession:
 
     def finish(self) -> None:
         """Synchronously end capture and complete its local transcription."""
-        if not self._active:
+        if self._state is not DictationState.RECORDING:
             return
         self.finish_transcription(self.end_capture())

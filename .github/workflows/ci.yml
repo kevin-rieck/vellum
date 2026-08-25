@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.13
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+      - name: Run tests
+        run: uv run pytest
+      - name: Typecheck
+        run: uv run mypy src
+      - name: Lint
+        run: uv run ruff check .
+
+  package-smoke:
+    runs-on: windows-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.13
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+      - name: Build installer
+        shell: pwsh
+        run: .\packaging\windows\build.ps1 -Version "0.1.0"
+      - name: Verify installer artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/installer/Vellum-0.1.0-setup.exe")) {
+            throw "The versioned Vellum installer was not created."
+          }
+      - name: Install and uninstall smoke test
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/Vellum-0.1.0-setup.exe").Path
+          Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/DIR={localappdata}\Vellum\ci-app' -Wait
+          if (-not (Test-Path "$env:LOCALAPPDATA\Vellum\ci-app\vellum.exe")) {
+            throw "The Vellum installer did not install the executable."
+          }
+          Start-Process -FilePath "$env:LOCALAPPDATA\Vellum\ci-app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait

@@ -158,3 +158,13 @@ def test_start_at_sign_in_command_quotes_the_executable() -> None:
     assert build_start_at_sign_in_command(r"C:\Program Files\Vellum\python.exe") == (
         '"C:\\Program Files\\Vellum\\python.exe" -m vellum.app'
     )
+
+
+def test_frozen_start_at_sign_in_launches_the_installed_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("vellum.windows.sys.frozen", True, raising=False)
+
+    assert build_start_at_sign_in_command(r"C:\Program Files\Vellum\vellum.exe") == (
+        '"C:\\Program Files\\Vellum\\vellum.exe"'
+    )

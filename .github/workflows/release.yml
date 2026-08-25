@@ -1,0 +1,39 @@
+name: Windows release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.13
+      - name: Install project
+        run: uv sync --locked --all-groups
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $projectVersion = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"$').Matches.Groups[1].Value
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          if ($projectVersion -ne $tagVersion) {
+            throw "Release tag $tagVersion does not match project version $projectVersion."
+          }
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+      - name: Build installer
+        shell: pwsh
+        run: .\packaging\windows\build.ps1 -Version "${{ github.ref_name }}".TrimStart('v')
+      - name: Publish installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/Vellum-*-setup.exe
+          generate_release_notes: true
