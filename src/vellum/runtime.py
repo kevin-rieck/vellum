@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from vellum.config import InputDevice, unambiguous_input_devices
 from vellum.session import MAXIMUM_DICTATION_SECONDS, Audio
 from vellum.startup import StartupPrerequisiteError
+from vellum.transcription_engines import LARGE_V3_TURBO, TranscriptionEngineDescriptor
 
 if TYPE_CHECKING:
     import numpy as np
@@ -33,9 +34,7 @@ def _register_cuda_dll_directories() -> None:
     toolkit_directory = program_files / "NVIDIA GPU Computing Toolkit" / "CUDA"
     candidates.extend(toolkit_directory.glob("v12.*/bin"))
 
-    candidates.extend(
-        Path(path) for path in os.environ.get("PATH", "").split(os.pathsep) if path
-    )
+    candidates.extend(Path(path) for path in os.environ.get("PATH", "").split(os.pathsep) if path)
     for directory in candidates:
         if (
             directory in _registered_cuda_dll_directories
@@ -47,22 +46,28 @@ def _register_cuda_dll_directories() -> None:
 
 
 class WindowsPrerequisiteProbe:
-    """Checks runtime prerequisites without downloading models or contacting a service."""
+    """Checks runtime prerequisites without downloading engine artifacts or contacting a service."""
 
-    def __init__(self, model_directory: Path) -> None:
-        self._model_directory = model_directory
+    def __init__(
+        self,
+        engine_directory: Path,
+        engine: TranscriptionEngineDescriptor = LARGE_V3_TURBO,
+    ) -> None:
+        self._engine_directory = engine_directory
+        self._engine = engine
 
     @property
-    def model_directory(self) -> Path:
-        return self._model_directory
+    def engine_directory(self) -> Path:
+        return self._engine_directory
 
     @property
-    def model_available(self) -> bool:
-        # The path name is an intentional v1 guard against silently using another model.
-        if self.model_directory.name != "large-v3-turbo":
+    def engine_available(self) -> bool:
+        # The directory name guards against silently using another engine.
+        if self.engine_directory.name != self._engine.directory_name:
             return False
-        required_files = ("model.bin", "config.json", "tokenizer.json")
-        return all((self.model_directory / file_name).is_file() for file_name in required_files)
+        return all(
+            (self.engine_directory / artifact.name).is_file() for artifact in self._engine.files
+        )
 
     @property
     def cuda_available(self) -> bool:
@@ -75,9 +80,9 @@ class WindowsPrerequisiteProbe:
 
 
 class FasterWhisperTranscriptionEngine:
-    """The resident local Transcription engine required by the v1 domain model."""
+    """The resident local Transcription engine required by the v1 domain glossary."""
 
-    def __init__(self, model_directory: Path, *, vocabulary_hints: Sequence[str]) -> None:
+    def __init__(self, engine_directory: Path, *, vocabulary_hints: Sequence[str]) -> None:
         self._hotwords = ", ".join(vocabulary_hints)
         _register_cuda_dll_directories()
         try:
@@ -88,21 +93,25 @@ class FasterWhisperTranscriptionEngine:
             ) from error
 
         try:
-            self._model: Any = WhisperModel(
-                str(model_directory), device="cuda", compute_type="float16", local_files_only=True
+            self._whisper_runtime: Any = WhisperModel(
+                str(engine_directory), device="cuda", compute_type="float16", local_files_only=True
             )
             self._validate_cuda_inference()
         except Exception as error:
             raise StartupPrerequisiteError(
-                "Vellum cannot start; the local large-v3-turbo model or CUDA inference "
-                f"runtime could not be loaded: {error}"
+                "Vellum cannot start; the local large-v3-turbo Transcription engine or CUDA "
+                f"inference runtime could not be loaded: {error}"
             ) from error
+
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply persisted Vocabulary hints without replacing the resident engine."""
+        self._hotwords = ", ".join(vocabulary_hints)
 
     def _validate_cuda_inference(self) -> None:
         """Force one GPU inference while warming so lazy CUDA failures block startup."""
         import numpy as np
 
-        segments, _ = self._model.transcribe(
+        segments, _ = self._whisper_runtime.transcribe(
             np.zeros(16_000, dtype=np.float32),
             language="en",
             vad_filter=False,
@@ -111,7 +120,7 @@ class FasterWhisperTranscriptionEngine:
         next(iter(segments), None)
 
     def transcribe(self, audio: Audio) -> str:
-        segments, _ = self._model.transcribe(
+        segments, _ = self._whisper_runtime.transcribe(
             audio,
             language="en",
             vad_filter=True,
@@ -126,7 +135,7 @@ class AsyncFasterWhisperTranscriptionEngine:
 
     def __init__(
         self,
-        model_directory: Path,
+        engine_directory: Path,
         vocabulary_hints: Sequence[str],
         on_ready: Callable[[Exception | None], None],
     ) -> None:
@@ -134,8 +143,9 @@ class AsyncFasterWhisperTranscriptionEngine:
         self._engine: FasterWhisperTranscriptionEngine | None = None
         self._error: Exception | None = None
         self._on_ready = on_ready
-        self._model_directory = model_directory
+        self._engine_directory = engine_directory
         self._vocabulary_hints = tuple(vocabulary_hints)
+        self._engine_lock = Lock()
         self._warming_started = False
 
     def start_warming(self) -> None:
@@ -143,7 +153,14 @@ class AsyncFasterWhisperTranscriptionEngine:
         if self._warming_started:
             return
         self._warming_started = True
-        Thread(target=self._warm, args=(self._model_directory,), daemon=True).start()
+        Thread(target=self._warm, args=(self._engine_directory,), daemon=True).start()
+
+    def set_vocabulary_hints(self, vocabulary_hints: Sequence[str]) -> None:
+        """Apply persisted hints to the resident engine once no session is active."""
+        with self._engine_lock:
+            self._vocabulary_hints = tuple(vocabulary_hints)
+            if self._engine is not None:
+                self._engine.set_vocabulary_hints(self._vocabulary_hints)
 
     def wait_until_ready(self) -> None:
         """Raise the warm-up error during startup, before the hotkey is enabled."""
@@ -161,11 +178,16 @@ class AsyncFasterWhisperTranscriptionEngine:
             raise RuntimeError("The local Transcription engine did not finish warming.")
         return self._engine.transcribe(audio)
 
-    def _warm(self, model_directory: Path) -> None:
+    def _warm(self, engine_directory: Path) -> None:
         try:
-            self._engine = FasterWhisperTranscriptionEngine(
-                model_directory, vocabulary_hints=self._vocabulary_hints
+            with self._engine_lock:
+                vocabulary_hints = self._vocabulary_hints
+            engine = FasterWhisperTranscriptionEngine(
+                engine_directory, vocabulary_hints=vocabulary_hints
             )
+            with self._engine_lock:
+                engine.set_vocabulary_hints(self._vocabulary_hints)
+                self._engine = engine
         except Exception as error:
             self._error = error
             self._on_ready(error)

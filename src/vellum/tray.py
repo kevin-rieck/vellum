@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from threading import Lock
 from typing import Any
 
@@ -11,6 +12,7 @@ from vellum.hotkey import PushToTalkHotkey
 from vellum.session import SessionFeedback
 from vellum.settings import SettingsController, SettingsWindow
 from vellum.sounds import WindowsSessionSounds
+from vellum.transcription_engines import EngineDownloadProgress, TranscriptionEngineDescriptor
 
 
 class TrayApplication:
@@ -27,6 +29,12 @@ class TrayApplication:
         self._hotkey: PushToTalkHotkey | None = None
         self._settings = settings or Settings()
         self._settings_controller: SettingsController | None = None
+        self._engines: tuple[TranscriptionEngineDescriptor, ...] = ()
+        self._engine_available: Callable[[TranscriptionEngineDescriptor], bool] = lambda _: False
+        self._on_engine_download: (
+            Callable[[Settings, Callable[[EngineDownloadProgress], None]], None] | None
+        ) = None
+        self._engine_setup_required = False
         self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
         self._icon_registered = False
@@ -53,11 +61,43 @@ class TrayApplication:
     def set_settings_controller(self, settings_controller: SettingsController) -> None:
         self._settings_controller = settings_controller
 
+    def set_engine_onboarding(
+        self,
+        engines: Sequence[TranscriptionEngineDescriptor],
+        engine_available: Callable[[TranscriptionEngineDescriptor], bool],
+        on_download: Callable[[Settings, Callable[[EngineDownloadProgress], None]], None],
+    ) -> None:
+        """Expose explicit engine acquisition through the existing Settings command."""
+        self._engines = tuple(engines)
+        self._engine_available = engine_available
+        self._on_engine_download = on_download
+
+    def activate_hotkey(self, hotkey: PushToTalkHotkey) -> None:
+        """Start a freshly warmed hotkey when onboarding finishes after tray startup."""
+        self._hotkey = hotkey
+        if self._icon_registered and not self._startup_failed:
+            try:
+                hotkey.start()
+            except Exception as error:
+                self.fail_startup(error)
+
+    def engine_setup_required(self) -> None:
+        """Keep the tray interactive while first-run engine acquisition is pending."""
+        self._engine_setup_required = True
+        self._icon.title = "Vellum — download the Transcription engine in Settings"
+        self._notify(
+            "Open Settings to choose, download, and verify the local Transcription engine.",
+            "Vellum Transcription engine setup",
+        )
+
     def apply_settings(self, settings: Settings) -> None:
         """Reflect a saved preference set in the tray without retaining session data."""
         self._settings = settings
         self._sounds.set_enabled(settings.sounds_enabled)
-        if self._icon.icon == self._images[SessionFeedback.IDLE]:
+        if (
+            self._icon.icon == self._images[SessionFeedback.IDLE]
+            and not self._engine_setup_required
+        ):
             self._icon.title = self._ready_title()
 
     def run(self, hotkey: PushToTalkHotkey | None = None) -> bool:
@@ -72,6 +112,7 @@ class TrayApplication:
         return not self._startup_failed
 
     def warming(self) -> None:
+        self._engine_setup_required = False
         self._icon.title = "Vellum — warming local Transcription engine"
 
     def fail_startup(self, error: Exception) -> None:
@@ -98,9 +139,7 @@ class TrayApplication:
                 "Vellum insertion cancelled",
             )
         elif feedback is SessionFeedback.NO_SPEECH:
-            self._notify(
-                "No usable speech was detected; the clipboard was not changed.", "Vellum"
-            )
+            self._notify("No usable speech was detected; the clipboard was not changed.", "Vellum")
 
     def report_error(self, error: Exception) -> None:
         """Show and persist failures raised during a Dictation session."""
@@ -131,7 +170,13 @@ class TrayApplication:
             self.report_error(RuntimeError("Vellum Settings are not available yet."))
             return
         try:
-            SettingsWindow(self._settings, self._settings_controller.save).show()
+            SettingsWindow(
+                self._settings,
+                self._settings_controller.save,
+                engines=self._engines,
+                engine_available=self._engine_available,
+                on_download=self._on_engine_download,
+            ).show()
         except Exception as error:
             self.report_error(error)
 

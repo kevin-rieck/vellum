@@ -66,11 +66,11 @@ def test_recorder_output_can_be_transcribed_by_vad_filter(
     )
 
     engine = FasterWhisperTranscriptionEngine.__new__(FasterWhisperTranscriptionEngine)
-    engine._model = OneDimensionalAudioModel()
+    engine._whisper_runtime = OneDimensionalAudioModel()
     engine._hotwords = "Vellum, CTranslate2"
 
     assert engine.transcribe(recorder.stop()) == ""
-    assert engine._model.transcription_options["hotwords"] == "Vellum, CTranslate2"
+    assert engine._whisper_runtime.transcription_options["hotwords"] == "Vellum, CTranslate2"
 
 
 def test_recorder_limits_retained_audio_to_its_configured_duration(

@@ -17,9 +17,6 @@ dependencies = [
   "sounddevice>=0.5,<1",
 ]
 
-[project.optional-dependencies]
-model-download = ["huggingface-hub>=0.27,<2"]
-
 [dependency-groups]
 dev = ["pytest>=8,<10", "mypy>=1.13,<2", "ruff>=0.8,<1"]
 

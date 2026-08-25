@@ -909,11 +909,6 @@ dependencies = [
     { name = "sounddevice" },
 ]
 
-[package.optional-dependencies]
-model-download = [
-    { name = "huggingface-hub" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
@@ -924,7 +919,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.1,<2" },
-    { name = "huggingface-hub", marker = "extra == 'model-download'", specifier = ">=0.27,<2" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pillow", specifier = ">=10,<12" },
     { name = "pynput", specifier = ">=1.7,<2" },
@@ -932,7 +926,6 @@ requires-dist = [
     { name = "pystray", specifier = ">=0.19,<1" },
     { name = "sounddevice", specifier = ">=0.5,<1" },
 ]
-provides-extras = ["model-download"]
 
 [package.metadata.requires-dev]
 dev = [

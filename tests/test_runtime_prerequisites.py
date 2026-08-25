@@ -81,9 +81,7 @@ def test_cuda_preflight_registers_the_cuda_bin_directory_before_loading_ctransla
 def test_cuda_preflight_registers_the_default_cuda_12_bin_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cuda_bin_directory = (
-        tmp_path / "NVIDIA GPU Computing Toolkit" / "CUDA" / "v12.9" / "bin"
-    )
+    cuda_bin_directory = tmp_path / "NVIDIA GPU Computing Toolkit" / "CUDA" / "v12.9" / "bin"
     cuda_bin_directory.mkdir(parents=True)
     (cuda_bin_directory / "cublas64_12.dll").touch()
     monkeypatch.delenv("CUDA_PATH", raising=False)
@@ -130,31 +128,32 @@ def test_engine_rejects_a_cuda_runtime_that_fails_on_lazy_inference(
     )
 
     with pytest.raises(StartupPrerequisiteError) as raised:
-        FasterWhisperTranscriptionEngine(
-            Path("large-v3-turbo"), vocabulary_hints=("Vellum",)
-        )
+        FasterWhisperTranscriptionEngine(Path("large-v3-turbo"), vocabulary_hints=("Vellum",))
 
     assert raised.value.__cause__ is inference_error
 
 
-def test_model_prerequisite_requires_all_files_needed_by_the_local_engine(tmp_path: Path) -> None:
-    model_directory = tmp_path / "large-v3-turbo"
-    model_directory.mkdir()
-    (model_directory / "model.bin").touch()
-    probe = WindowsPrerequisiteProbe(model_directory)
-
-    assert probe.model_available is False
-
-    (model_directory / "config.json").touch()
-    (model_directory / "tokenizer.json").touch()
-
-    assert probe.model_available is True
-
-
-def test_model_prerequisite_rejects_a_different_local_model(tmp_path: Path) -> None:
-    model_directory = tmp_path / "small"
-    model_directory.mkdir()
+def test_engine_prerequisite_requires_all_files_in_the_selected_engine_manifest(
+    tmp_path: Path,
+) -> None:
+    engine_directory = tmp_path / "large-v3-turbo"
+    engine_directory.mkdir()
     for file_name in ("model.bin", "config.json", "tokenizer.json"):
-        (model_directory / file_name).touch()
+        (engine_directory / file_name).touch()
+    probe = WindowsPrerequisiteProbe(engine_directory)
 
-    assert WindowsPrerequisiteProbe(model_directory).model_available is False
+    assert probe.engine_available is False
+
+    for file_name in ("preprocessor_config.json", "vocabulary.json"):
+        (engine_directory / file_name).touch()
+
+    assert probe.engine_available is True
+
+
+def test_engine_prerequisite_rejects_a_different_local_engine(tmp_path: Path) -> None:
+    engine_directory = tmp_path / "small"
+    engine_directory.mkdir()
+    for file_name in ("model.bin", "config.json", "tokenizer.json"):
+        (engine_directory / file_name).touch()
+
+    assert WindowsPrerequisiteProbe(engine_directory).engine_available is False

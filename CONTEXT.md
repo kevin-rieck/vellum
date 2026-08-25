@@ -26,7 +26,7 @@ The privacy boundary under which Dictation session audio, transcripts, and deriv
 _Avoid_: Private mode, offline-capable
 
 **Transcription engine**:
-A replaceable local component that converts Dictation session audio into a transcript. V1 uses faster-whisper with the `large-v3-turbo` model, warms asynchronously at Tray application startup, and remains resident while it runs.
+A replaceable local component that converts Dictation session audio into a transcript. V1 uses the explicitly selected `large-v3-turbo` faster-whisper Transcription engine, verifies its download before atomically installing it, warms asynchronously at Tray application startup, and remains resident while it runs.
 _Avoid_: Whisper, model
 
 **Transcript**:
@@ -70,5 +70,5 @@ The retention policy under which Dictation session audio exists only in memory u
 _Avoid_: Recording history, transcript archive
 
 **Vocabulary hints**:
-A local list of technical terms supplied to the Transcription engine to improve recognition. V1 includes Vellum and accepts additional terms through `VELLUM_VOCABULARY_HINTS`; it does not apply post-transcription replacement rules.
+A local list of technical terms persisted in Settings and supplied directly to the Transcription engine to improve recognition. V1 always includes Vellum, accepts additional terms in Settings, and does not apply post-transcription replacement rules.
 _Avoid_: Autocorrect, replacement dictionary

@@ -13,6 +13,11 @@ from vellum.windows import (
 )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows adapter requires Windows APIs")
+def test_current_process_elevation_query_returns_a_boolean() -> None:
+    assert isinstance(WindowsPaste._current_process_is_elevated(), bool)
+
+
 def test_paste_skips_a_target_that_is_no_longer_foreground(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("vellum.windows.sys.platform", "win32")
     monkeypatch.setattr(WindowsFocus, "foreground_target", lambda _: 202)
