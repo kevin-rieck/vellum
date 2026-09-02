@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from vellum.config import Settings
-from vellum.diagnostics import log_error
+from vellum.diagnostics import build_redacted_diagnostics, log_error
 from vellum.hotkey import PushToTalkHotkey
 from vellum.session import SessionFeedback
 from vellum.settings import SettingsController, SettingsWindow
 from vellum.sounds import WindowsSessionSounds
 from vellum.transcription_engines import EngineDownloadProgress, TranscriptionEngineDescriptor
+from vellum.updates import UpdateChecker, UpdateCheckError, UpdateStatus
+from vellum.windows import WindowsClipboard
 
 
 class TrayApplication:
@@ -35,6 +38,8 @@ class TrayApplication:
             Callable[[Settings, Callable[[EngineDownloadProgress], None]], None] | None
         ) = None
         self._engine_setup_required = False
+        self._update_checker: UpdateChecker | None = None
+        self._diagnostics_log_file: Path | None = None
         self._sounds = WindowsSessionSounds(enabled=self._settings.sounds_enabled)
         self._startup_failed = False
         self._icon_registered = False
@@ -60,6 +65,13 @@ class TrayApplication:
 
     def set_settings_controller(self, settings_controller: SettingsController) -> None:
         self._settings_controller = settings_controller
+
+    def set_release_services(
+        self, update_checker: UpdateChecker, diagnostics_log_file: Path
+    ) -> None:
+        """Attach local diagnostics and explicit update discovery to Settings."""
+        self._update_checker = update_checker
+        self._diagnostics_log_file = diagnostics_log_file
 
     def set_engine_onboarding(
         self,
@@ -176,9 +188,57 @@ class TrayApplication:
                 engines=self._engines,
                 engine_available=self._engine_available,
                 on_download=self._on_engine_download,
+                on_check_for_updates=self.check_for_updates,
+                on_copy_diagnostics=self.copy_redacted_diagnostics,
             ).show()
         except Exception as error:
             self.report_error(error)
+
+    def check_for_updates(self) -> None:
+        """Perform a user-requested comparison without downloading or installing anything."""
+        if self._update_checker is None:
+            self._notify(
+                "Update discovery is not available in this Vellum session.",
+                "Vellum updates",
+            )
+            return
+        try:
+            result = self._update_checker.check()
+        except UpdateCheckError:
+            self._notify(
+                "Vellum could not check for updates. Try again later.",
+                "Vellum updates",
+            )
+            return
+
+        if result.status is UpdateStatus.UP_TO_DATE:
+            self._notify("Vellum is up to date.", "Vellum updates")
+            return
+        if result.release is None:
+            self._notify("Vellum found an update without a release link.", "Vellum updates")
+            return
+        self._notify(
+            f"Vellum {result.release.version} is available: {result.release.url}",
+            "Vellum update available",
+        )
+
+    def copy_redacted_diagnostics(self) -> None:
+        """Copy a redacted local snapshot only after the user requests it."""
+        if self._diagnostics_log_file is None:
+            self._notify(
+                "Redacted diagnostics are not available in this Vellum session.",
+                "Vellum diagnostics",
+            )
+            return
+        try:
+            WindowsClipboard().copy(build_redacted_diagnostics(self._diagnostics_log_file))
+        except Exception as error:
+            self.report_error(error)
+            return
+        self._notify(
+            "Redacted diagnostics copied to the clipboard.",
+            "Vellum diagnostics",
+        )
 
     def _quit(self, icon: Any, item: Any) -> None:
         del item

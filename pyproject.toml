@@ -6,6 +6,7 @@ build-backend = "uv_build"
 name = "vellum"
 version = "0.1.0"
 description = "Windows-first, local push-to-talk dictation"
+license = { file = "LICENSE" }
 requires-python = ">=3.13"
 dependencies = [
   "faster-whisper>=1.1,<2",

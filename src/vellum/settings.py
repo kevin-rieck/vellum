@@ -80,6 +80,8 @@ class SettingsWindow:
         engines: Sequence[TranscriptionEngineDescriptor] = (),
         engine_available: Callable[[TranscriptionEngineDescriptor], bool] | None = None,
         on_download: EngineDownload | None = None,
+        on_check_for_updates: Callable[[], None] | None = None,
+        on_copy_diagnostics: Callable[[], None] | None = None,
     ) -> None:
         self._settings = settings
         self._on_save = on_save
@@ -87,6 +89,8 @@ class SettingsWindow:
         self._engines = tuple(engines)
         self._engine_available = engine_available or (lambda _: False)
         self._on_download = on_download
+        self._on_check_for_updates = on_check_for_updates
+        self._on_copy_diagnostics = on_copy_diagnostics
 
     def show(self) -> None:
         """Open the Settings form and keep all choices in local process memory."""
@@ -270,6 +274,22 @@ class SettingsWindow:
         ttk.Label(frame, textvariable=error_text, foreground="#b91c1c", wraplength=430).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(4, 8)
         )
+        row += 1
+
+        release_tools = ttk.Frame(frame)
+        release_tools.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        if self._on_check_for_updates is not None:
+            ttk.Button(
+                release_tools,
+                text="Check for updates",
+                command=self._on_check_for_updates,
+            ).grid(row=0, column=0, padx=(0, 6))
+        if self._on_copy_diagnostics is not None:
+            ttk.Button(
+                release_tools,
+                text="Copy redacted diagnostics",
+                command=self._on_copy_diagnostics,
+            ).grid(row=0, column=1)
         row += 1
 
         buttons = ttk.Frame(frame)

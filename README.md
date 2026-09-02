@@ -6,6 +6,18 @@ Vellum is a Windows-first, local-only Push-to-talk dictation application. Hold
 system clipboard and sends Ctrl+V only if the foreground Insertion target is
 the same window that was focused when microphone capture ended.
 
+## Installed Windows release
+
+Download the versioned `Vellum-<version>-setup.exe` from the project's release page and
+run it as the current Windows user. The installer creates a Start menu shortcut and can
+optionally create a desktop shortcut; it does not require administrator access. It does
+not bundle the approximately 1.51 GiB Transcription engine. The engine is acquired
+explicitly and verified from Settings on first launch.
+
+The installer keeps `%LOCALAPPDATA%\\Vellum\\settings.json`, the verified engine, and the
+redacted local diagnostics log when the application is uninstalled. Reinstalling Vellum
+therefore preserves the user's Settings and downloaded engine.
+
 ## Tracer-bullet setup
 
 Install [uv](https://docs.astral.sh/uv/) first. It provisions the project-pinned
@@ -41,19 +53,29 @@ post-transcription replacements. Set `VELLUM_ENGINE_DIR` only to use an existing
 local `large-v3-turbo` directory (the directory name must remain
 `large-v3-turbo`).
 
-To verify the tracer bullet, focus Notepad, hold Ctrl+Alt+Space while speaking
-English, then release it. The raw Transcript should appear in Notepad and
-remain available through Ctrl+V. The tray's **Settings** command can select the Transcription engine and its
-Vocabulary hints, select an Input device, change the Activation hotkey, toggle
-sounds, and opt in to start-at-sign-in; these choices are stored in
-`%LOCALAPPDATA%\Vellum\settings.json`.
+To verify the installed release, follow the [v1 acceptance checklist](docs/release/v1-acceptance.md).
+In brief, open Settings and explicitly download and verify the Transcription engine, then
+focus Notepad, hold Ctrl+Alt+Space while speaking English, and release it. The raw
+Transcript should appear in Notepad and remain available through Ctrl+V. The tray's
+**Settings** command can select the Transcription engine and its Vocabulary hints, select
+an Input device, change the Activation hotkey, toggle sounds, opt in to start-at-sign-in,
+check for updates, and copy redacted diagnostics. These choices are stored in
+`%LOCALAPPDATA%\Vellum\settings.json`. Update discovery is user-initiated and only
+provides a release link; Vellum never downloads or installs an update automatically.
 Vellum keeps using the Windows default Input device until one is selected, and
 reports an unavailable selected device instead of switching microphones. If
 focus moves while the Transcription engine processes the Dictation session,
 Vellum does not paste and instead notifies you that the Transcript remains in
-the clipboard. Errors are also written to the launching console and to
-`%LOCALAPPDATA%\Vellum\vellum.log`, including a traceback for failures after
-the hotkey is used. The log never contains audio or Transcripts.
+the clipboard. Errors are written locally to `%LOCALAPPDATA%\Vellum\vellum.log`
+using an allowlist of exception types and sanitized stack locations. The log never
+contains exception messages, user paths, audio, Transcripts, clipboard contents, or
+Settings values. **Settings > Copy redacted diagnostics** places a sanitized snapshot
+in the clipboard only after the user requests it; Vellum has no diagnostics upload or
+telemetry path.
+
+## License
+
+Vellum is distributed under the [Apache License 2.0](LICENSE).
 
 ## Development
 

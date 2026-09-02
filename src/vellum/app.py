@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable, Sequence
 
+from vellum import __version__
 from vellum.config import Settings, SettingsError, SettingsStore, VellumPaths
 from vellum.diagnostics import configure_diagnostics, log_error
 from vellum.hotkey import PushToTalkHotkey
@@ -26,6 +27,7 @@ from vellum.transcription_engines import (
     transcription_engine_by_id,
 )
 from vellum.tray import TrayApplication
+from vellum.updates import UpdateChecker
 from vellum.windows import WindowsClipboard, WindowsFocus, WindowsPaste, WindowsStartAtSignIn
 
 
@@ -52,6 +54,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     except RuntimeError as error:
         log_error(error)
         return 2
+    set_release_services = getattr(tray, "set_release_services", None)
+    if callable(set_release_services):
+        set_release_services(UpdateChecker(__version__), paths.diagnostics_log_file)
 
     recorder: SoundDeviceRecorder | None = None
     session: DictationSession | None = None

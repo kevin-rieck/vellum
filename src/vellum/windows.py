@@ -11,8 +11,14 @@ from vellum.session import InsertionTarget
 
 
 def build_start_at_sign_in_command(executable: str | None = None) -> str:
-    """Build a correctly quoted user-level command to launch Vellum at sign-in."""
-    return subprocess.list2cmdline([executable or sys.executable, "-m", "vellum.app"])
+    """Build a correctly quoted user-level command to launch Vellum at sign-in.
+
+    A frozen installer launch must execute the bundled application directly; the
+    source checkout launch retains the module invocation used by development.
+    """
+    executable = executable or sys.executable
+    command = [executable] if getattr(sys, "frozen", False) else [executable, "-m", "vellum.app"]
+    return subprocess.list2cmdline(command)
 
 
 class WindowsStartAtSignIn:
