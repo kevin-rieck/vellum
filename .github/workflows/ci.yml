@@ -48,8 +48,9 @@ jobs:
         shell: pwsh
         run: |
           $installer = (Resolve-Path "dist/installer/Vellum-0.1.0-setup.exe").Path
-          Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/DIR={localappdata}\Vellum\ci-app' -Wait
-          if (-not (Test-Path "$env:LOCALAPPDATA\Vellum\ci-app\vellum.exe")) {
+          $installRoot = Join-Path $env:LOCALAPPDATA "Vellum\ci-app"
+          Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installRoot`"" -Wait
+          if (-not (Test-Path (Join-Path $installRoot "vellum.exe"))) {
             throw "The Vellum installer did not install the executable."
           }
-          Start-Process -FilePath "$env:LOCALAPPDATA\Vellum\ci-app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          Start-Process -FilePath (Join-Path $installRoot "unins000.exe") -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
