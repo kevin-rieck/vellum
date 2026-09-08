@@ -127,6 +127,8 @@ class PushToTalkHotkey:
                 timer = Timer(MAXIMUM_DICTATION_SECONDS, self._end_capture_if_active)
                 self._limit_timer = timer
         except Exception as error:
+            with self._capture_lock:
+                self._capture_active = self._session.active
             self._on_error(error)
             return
         timer.start()
