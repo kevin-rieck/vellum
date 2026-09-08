@@ -9,7 +9,7 @@ import pytest
 
 from vellum import hotkey
 from vellum.hotkey import PushToTalkHotkey
-from vellum.session import DictationSession
+from vellum.session import DictationSession, SessionFeedback
 
 
 class FakeRecorder:
@@ -57,14 +57,17 @@ class DeferredThread:
         pass
 
 
-def make_session(recorder: FakeRecorder) -> DictationSession:
+def make_session(
+    recorder: FakeRecorder,
+    feedback: Callable[[SessionFeedback], None] | None = None,
+) -> DictationSession:
     return DictationSession(
         recorder=recorder,
         transcription_engine=SuccessfulFakeEngine(),
         focus=FakeFocus(),
         clipboard=FakeClipboard(),
         inserter=FakeInserter(),
-        feedback=lambda _: None,
+        feedback=feedback or (lambda _: None),
     )
 
 
@@ -156,6 +159,101 @@ def test_hotkey_ends_capture_at_the_duration_limit_and_cancels_the_next_timer_on
     assert next_timer.cancelled is True
     next_timer.function()
     assert recorder.stops == 1
+
+
+def test_key_release_recovers_capture_after_start_feedback_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    DeferredThread.started = []
+    feedback_error = RuntimeError("tray unavailable")
+    cleanup_error = RuntimeError("microphone unavailable")
+
+    class RecorderWithTransientCleanupFailure(FakeRecorder):
+        def stop(self) -> bytes:
+            self.stops += 1
+            if self.stops == 1:
+                raise cleanup_error
+            self.stopped = True
+            return b"spoken audio"
+
+    class DeferredTimer:
+        def __init__(self, interval: float, function: Callable[[], None]) -> None:
+            assert interval == 60
+            self.function = function
+
+        def start(self) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+    class Listener:
+        instance: ClassVar[Listener | None] = None
+
+        def __init__(
+            self,
+            *,
+            on_press: Callable[[object], None],
+            on_release: Callable[[object], None],
+        ) -> None:
+            self.on_press = on_press
+            self.on_release = on_release
+            type(self).instance = self
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    key = SimpleNamespace(
+        ctrl=object(),
+        ctrl_l=object(),
+        ctrl_r=object(),
+        alt=object(),
+        alt_l=object(),
+        alt_r=object(),
+        space=object(),
+    )
+    events: list[SessionFeedback] = []
+
+    def feedback(event: SessionFeedback) -> None:
+        events.append(event)
+        if event is SessionFeedback.RECORDING and events.count(SessionFeedback.RECORDING) == 1:
+            raise feedback_error
+
+    recorder = RecorderWithTransientCleanupFailure()
+    errors: list[Exception] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "pynput",
+        SimpleNamespace(keyboard=SimpleNamespace(Key=key, Listener=Listener)),
+    )
+    monkeypatch.setattr(hotkey, "Timer", DeferredTimer)
+    monkeypatch.setattr(hotkey, "Thread", DeferredThread)
+    activation = PushToTalkHotkey(make_session(recorder, feedback), errors.append)
+    activation.enable()
+    activation.start()
+
+    assert Listener.instance is not None
+    Listener.instance.on_press(key.ctrl)
+    Listener.instance.on_press(key.alt)
+    Listener.instance.on_press(key.space)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], ExceptionGroup)
+    assert errors[0].exceptions == (feedback_error, cleanup_error)
+    assert recorder.stops == 1
+
+    Listener.instance.on_release(key.space)
+
+    assert recorder.stops == 2
+    assert len(DeferredThread.started) == 1
+    finish, args, _ = DeferredThread.started[0]
+    finish(*args)
+
+    Listener.instance.on_press(key.space)
+    assert recorder.starts == 2
 
 
 def test_configured_activation_hotkey_starts_and_ends_push_to_talk(
